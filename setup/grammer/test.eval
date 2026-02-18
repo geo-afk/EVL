@@ -1,0 +1,28 @@
+int x = 10
+float y = 20.5
+int sum = x + y  // Implicit conversion (weak typing)
+
+print("Sum:", sum)
+const int newVal = cast(y, int)
+
+
+int pi = PI
+int dayOfWeek = DAYS_IN_WEEK
+int hourInDay =  HOURS_IN_DAY
+int year = Year
+
+float g = pow(by, number)
+int val = sqrt(num)
+int = min(y, r)
+int max = max(t, w)
+float vali = round(y)
+
+
+try {
+    int result = 100 / 0
+} catch {
+    print("Error: Division by zero!")
+}
+
+
+int c = 20 + 40 * 40;  // Correctly evaluates to 1620
