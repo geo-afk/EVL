@@ -12,7 +12,7 @@ JAR_NAME="antlr-4.13.2-complete.jar"
 ANTLR_JAR = os.path.join(ROOT, JAR_NAME)
 PARSER_PATTERN = r".*Parser\.g4$"
 LEXER_PATTERN = r".*Lexer\.g4$"
-PACKAGE_NAME = "parsing"
+PACKAGE_NAME = "generated"
 path_to_save = os.path.join("..", PACKAGE_NAME)
 
 
@@ -70,7 +70,7 @@ def main():
     if not os.path.exists(ANTLR_JAR):
         errors.append(f"ANTLR jar not found at '{ANTLR_JAR}'")
 
-    # Check parser and lexer files
+    # Check grammer and lexer files
     if not check_if_exists(PARSER_PATTERN):
         errors.append("No Parser.g4 files found in current directory")
 
