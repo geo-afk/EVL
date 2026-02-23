@@ -160,7 +160,7 @@ uv sync
 ### Generate Lexer & Parser
 
 ```bash
-antlr4 -Dlanguage=Python3 grammar/EVL.g4 -o src/parser
+antlr4 -Dlanguage=Python3 grammar/EVL.g4 -o src/grammer
 ```
 
 ### Run the Interpreter

@@ -79,12 +79,9 @@ type
 // ═══════════════════════════════════════════════════════════════════════════════
 
 expression
-    // ── Logical ──────────────────────────────────────────────────────────────
-    : expression OR  expression                                         # orExpr
-    | expression AND expression                                         # andExpr
 
     // ── Equality ─────────────────────────────────────────────────────────────
-    | expression op=(EQ | NEQ) expression                               # equalityExpr
+    : expression op=(EQ | NEQ) expression                               # equalityExpr
 
     // ── Relational ───────────────────────────────────────────────────────────
     | expression op=(LT | GT | LTE | GTE) expression                   # relationalExpr
@@ -97,8 +94,6 @@ expression
 
     // ── Unary ────────────────────────────────────────────────────────────────
     | MINUS expression                                                   # unaryMinusExpr
-    | NOT   expression                                                   # notExpr
-
     // ── Grouping ─────────────────────────────────────────────────────────────
     | LPAREN expression RPAREN                                          # parenExpr
 
@@ -198,5 +193,5 @@ whileStatement
 // The catch block now accepts any number of statements, not just one print.
 
 tryStatement
-    : TRY block CATCH block
+    : TRY block CATCH LPAREN IDENTIFIER RPAREN block
     ;

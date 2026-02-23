@@ -55,11 +55,6 @@ GT          : '>';
 LTE         : '<=';
 GTE         : '>=';
 
-// ─── Logical Operators ────────────────────────────────────────────────────────
-AND         : '&&';
-OR          : '||';
-NOT         : '!';
-
 // ─── Assignment ───────────────────────────────────────────────────────────────
 // NOTE: ASSIGN must come AFTER compound operators and EQ to avoid mis-tokenising
 ASSIGN      : '=';
