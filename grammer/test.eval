@@ -3,6 +3,7 @@ float y = 20.5
 int sum = x + y  // Implicit conversion (weak typing)
 
 print("Sum:", sum)
+
 const int newVal = cast(y, int)
 
 
@@ -12,7 +13,7 @@ int hourInDay =  HOURS_IN_DAY
 int year = YEAR
 
 int by = 0
-int number = 0
+int number = 01
 
 float g = pow(by, number)
 

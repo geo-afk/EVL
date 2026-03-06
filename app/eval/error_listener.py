@@ -1,7 +1,7 @@
 from antlr4.error.ErrorListener import ErrorListener
 from app.models.CustomError import ErrorResponse, MarkerSeverity
 
-class RPLErrorListener(ErrorListener):
+class EVALErrorListener(ErrorListener):
     """
     Custom error listener that collects errors instead of printing them.
     """

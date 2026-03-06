@@ -1,0 +1,170 @@
+// ─────────────────────────────────────────────────────────────
+// Constants and variable declarations
+// ─────────────────────────────────────────────────────────────
+
+const int MAX_COUNT = 10
+const float EPSILON = 0.001
+const string APP_NAME = "EvalLang Demo"
+const bool FEATURE_ENABLED = true
+
+int counter = 0
+float temperature = 23.5
+string status = "initial"
+bool running = false
+
+// ─────────────────────────────────────────────────────────────
+// Macro usage
+// ─────────────────────────────────────────────────────────────
+
+int days = DAYS_IN_WEEK
+int hours = HOURS_IN_DAY
+int year = YEAR
+float circleRatio = PI
+
+// ─────────────────────────────────────────────────────────────
+// Arithmetic expressions (all operators & precedence)
+// ─────────────────────────────────────────────────────────────
+
+int sum = 1 + 2
+int difference = 10 - 3
+int product = 4 * 5
+int quotient = 20 / 4
+int remainder = 22 % 5
+
+int complexMath =
+    (1 + 2) * 3
+    - 4 / 2
+    + 5 % 3
+
+float negativeValue = -3.14
+float nestedUnary = -(1 + (2 * 3))
+
+// ─────────────────────────────────────────────────────────────
+// Compound assignments
+// ─────────────────────────────────────────────────────────────
+
+counter += 1
+counter -= 2
+counter *= 3
+counter /= 2
+
+temperature += 1.5
+temperature -= 0.5
+
+// ─────────────────────────────────────────────────────────────
+// Comparison & equality expressions
+// ─────────────────────────────────────────────────────────────
+
+bool eqTest = counter == 10
+bool neqTest = counter != 5
+bool ltTest = counter < 20
+bool gtTest = counter > 0
+bool lteTest = counter <= 10
+bool gteTest = counter >= 1
+
+// ─────────────────────────────────────────────────────────────
+// Built-in function calls
+// ─────────────────────────────────────────────────────────────
+
+float powerValue = pow(2, 8)
+float rootValue = sqrt(144)
+float minValue = min(10, 5)
+float maxValue = max(10, 5)
+float rounded = round(3.6)
+float absolute = abs(-42)
+
+int castedInt = cast(3.99, int)
+float castedFloat = cast(10, float)
+string castedString = cast(123, string)
+bool castedBool = cast(1, bool)
+
+// Expressions inside function arguments
+float complexFunc =
+    pow(1 + 2, 3 * 2) + sqrt(16 + 9)
+
+// ─────────────────────────────────────────────────────────────
+// Print statements (strings + expressions)
+// ─────────────────────────────────────────────────────────────
+
+print("Application:", APP_NAME)
+print("Counter:", counter)
+print("Temperature:", temperature, "Status:", status)
+print("Math:", sum + product * 2)
+print("Macros:", DAYS_IN_WEEK, HOURS_IN_DAY, YEAR, PI)
+
+// ─────────────────────────────────────────────────────────────
+// If / Else If / Else
+// ─────────────────────────────────────────────────────────────
+
+if (counter < 0) {
+    print("Counter is negative")
+} else if (counter == 0) {
+    print("Counter is zero")
+if (counter < MAX_COUNT) {
+    print("Counter is below max")
+} else {
+    print("Counter exceeded max")
+}
+
+// ─────────────────────────────────────────────────────────────
+// While loop
+// ─────────────────────────────────────────────────────────────
+
+while (counter < 5) {
+    print("Loop iteration:", counter)
+    counter += 1
+}
+
+// ─────────────────────────────────────────────────────────────
+// Nested blocks
+// ─────────────────────────────────────────────────────────────
+
+{
+    int scopedValue = 100
+    {
+        int innerValue = scopedValue + 50
+        print("Inner value:", innerValue)
+    }
+    print("Outer scoped value:", scopedValue)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Try / Catch
+// ─────────────────────────────────────────────────────────────
+
+try {
+    int risky = 10 / 2
+    print("Risky result:", risky)
+
+    int another = cast("123", int)
+    print("Casted:", another)
+} catch (error) {
+    print("Caught error:", error)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Boolean literals & reassignment
+// ─────────────────────────────────────────────────────────────
+
+running = true
+running = false
+
+// ─────────────────────────────────────────────────────────────
+// String literals with escapes
+// ─────────────────────────────────────────────────────────────
+
+string message = "Line1\nLine2\tTabbed \"Quoted\""
+print(message)
+
+// ─────────────────────────────────────────────────────────────
+// Final expression stress test
+// ─────────────────────────────────────────────────────────────
+
+float finalResult =
+    abs(-10)
+    + round(2.3)
+    * max(3, min(5, 4))
+    - pow(2, 3)
+    / sqrt(16)
+
+print("Final result:", finalResult)

@@ -2,6 +2,7 @@ parser grammar EVALParser;
 
 options { tokenVocab=EVALLexer; }
 
+
 program
     : statement* EOF
     ;
@@ -34,6 +35,9 @@ block
 variableDeclaration
     : type IDENTIFIER ASSIGN expression
     ;
+
+
+
 
 constDeclaration
     : CONST variableDeclaration
