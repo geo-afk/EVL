@@ -80,21 +80,12 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by EVALParser#minExpr.
-    def enterMinExpr(self, ctx:EVALParser.MinExprContext):
+    # Enter a parse tree produced by EVALParser#builtinExpr.
+    def enterBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
         pass
 
-    # Exit a parse tree produced by EVALParser#minExpr.
-    def exitMinExpr(self, ctx:EVALParser.MinExprContext):
-        pass
-
-
-    # Enter a parse tree produced by EVALParser#castExpr.
-    def enterCastExpr(self, ctx:EVALParser.CastExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#castExpr.
-    def exitCastExpr(self, ctx:EVALParser.CastExprContext):
+    # Exit a parse tree produced by EVALParser#builtinExpr.
+    def exitBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
         pass
 
 
@@ -104,15 +95,6 @@ class EVALParserListener(ParseTreeListener):
 
     # Exit a parse tree produced by EVALParser#macroExpr.
     def exitMacroExpr(self, ctx:EVALParser.MacroExprContext):
-        pass
-
-
-    # Enter a parse tree produced by EVALParser#sqrtExpr.
-    def enterSqrtExpr(self, ctx:EVALParser.SqrtExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#sqrtExpr.
-    def exitSqrtExpr(self, ctx:EVALParser.SqrtExprContext):
         pass
 
 
@@ -131,15 +113,6 @@ class EVALParserListener(ParseTreeListener):
 
     # Exit a parse tree produced by EVALParser#intLiteral.
     def exitIntLiteral(self, ctx:EVALParser.IntLiteralContext):
-        pass
-
-
-    # Enter a parse tree produced by EVALParser#absExpr.
-    def enterAbsExpr(self, ctx:EVALParser.AbsExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#absExpr.
-    def exitAbsExpr(self, ctx:EVALParser.AbsExprContext):
         pass
 
 
@@ -179,24 +152,6 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by EVALParser#roundExpr.
-    def enterRoundExpr(self, ctx:EVALParser.RoundExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#roundExpr.
-    def exitRoundExpr(self, ctx:EVALParser.RoundExprContext):
-        pass
-
-
-    # Enter a parse tree produced by EVALParser#maxExpr.
-    def enterMaxExpr(self, ctx:EVALParser.MaxExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#maxExpr.
-    def exitMaxExpr(self, ctx:EVALParser.MaxExprContext):
-        pass
-
-
     # Enter a parse tree produced by EVALParser#identExpr.
     def enterIdentExpr(self, ctx:EVALParser.IdentExprContext):
         pass
@@ -233,15 +188,6 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by EVALParser#powExpr.
-    def enterPowExpr(self, ctx:EVALParser.PowExprContext):
-        pass
-
-    # Exit a parse tree produced by EVALParser#powExpr.
-    def exitPowExpr(self, ctx:EVALParser.PowExprContext):
-        pass
-
-
     # Enter a parse tree produced by EVALParser#multiplicativeExpr.
     def enterMultiplicativeExpr(self, ctx:EVALParser.MultiplicativeExprContext):
         pass
@@ -257,6 +203,15 @@ class EVALParserListener(ParseTreeListener):
 
     # Exit a parse tree produced by EVALParser#equalityExpr.
     def exitEqualityExpr(self, ctx:EVALParser.EqualityExprContext):
+        pass
+
+
+    # Enter a parse tree produced by EVALParser#builtinFunc.
+    def enterBuiltinFunc(self, ctx:EVALParser.BuiltinFuncContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#builtinFunc.
+    def exitBuiltinFunc(self, ctx:EVALParser.BuiltinFuncContext):
         pass
 
 

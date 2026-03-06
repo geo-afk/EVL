@@ -49,23 +49,13 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by EVALParser#minExpr.
-    def visitMinExpr(self, ctx:EVALParser.MinExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by EVALParser#castExpr.
-    def visitCastExpr(self, ctx:EVALParser.CastExprContext):
+    # Visit a parse tree produced by EVALParser#builtinExpr.
+    def visitBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
         return self.visitChildren(ctx)
 
 
     # Visit a parse tree produced by EVALParser#macroExpr.
     def visitMacroExpr(self, ctx:EVALParser.MacroExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by EVALParser#sqrtExpr.
-    def visitSqrtExpr(self, ctx:EVALParser.SqrtExprContext):
         return self.visitChildren(ctx)
 
 
@@ -76,11 +66,6 @@ class EVALParserVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by EVALParser#intLiteral.
     def visitIntLiteral(self, ctx:EVALParser.IntLiteralContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by EVALParser#absExpr.
-    def visitAbsExpr(self, ctx:EVALParser.AbsExprContext):
         return self.visitChildren(ctx)
 
 
@@ -104,16 +89,6 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by EVALParser#roundExpr.
-    def visitRoundExpr(self, ctx:EVALParser.RoundExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by EVALParser#maxExpr.
-    def visitMaxExpr(self, ctx:EVALParser.MaxExprContext):
-        return self.visitChildren(ctx)
-
-
     # Visit a parse tree produced by EVALParser#identExpr.
     def visitIdentExpr(self, ctx:EVALParser.IdentExprContext):
         return self.visitChildren(ctx)
@@ -134,11 +109,6 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by EVALParser#powExpr.
-    def visitPowExpr(self, ctx:EVALParser.PowExprContext):
-        return self.visitChildren(ctx)
-
-
     # Visit a parse tree produced by EVALParser#multiplicativeExpr.
     def visitMultiplicativeExpr(self, ctx:EVALParser.MultiplicativeExprContext):
         return self.visitChildren(ctx)
@@ -146,6 +116,11 @@ class EVALParserVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by EVALParser#equalityExpr.
     def visitEqualityExpr(self, ctx:EVALParser.EqualityExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by EVALParser#builtinFunc.
+    def visitBuiltinFunc(self, ctx:EVALParser.BuiltinFuncContext):
         return self.visitChildren(ctx)
 
 
