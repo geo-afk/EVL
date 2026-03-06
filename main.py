@@ -1,13 +1,16 @@
 # import uvicorn
-# import structlog
+import structlog
 from app.eval.eval import EVALAnalyzer
+from app.utils.log_config import setup_logging
 
-# logger = structlog.get_logger("api")
+
+# setup_logging()
+logger = structlog.get_logger("api")
 
 
 if __name__ == "__main__":
 
-    with open("./grammer/test2.eval") as f:
+    with open("./grammer/test.eval") as f:
         data = f.read()
 
     code = data
