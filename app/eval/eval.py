@@ -109,7 +109,6 @@ class EVALAnalyzer:
         try:
             analyzer.visit(parse_tree)
 
-
             result = {}
 
             return result
