@@ -22,6 +22,7 @@ statement
     | ifStatement                   // if (cond) { ... } else { ... }
     | whileStatement                // while (cond) { ... }
     | tryStatement                  // try { ... } catch { ... }
+    | builtinFunc                   // standalone built-in call e.g. pow(x, 2)
     | block                         // bare { ... }
     ;
 
@@ -31,13 +32,11 @@ block
     : LBRACE statement* RBRACE
     ;
 
+// ─── Variable / Const declarations ───────────────────────────────────────────
 
 variableDeclaration
     : type IDENTIFIER ASSIGN expression
     ;
-
-
-
 
 constDeclaration
     : CONST variableDeclaration
@@ -83,7 +82,6 @@ type
 // ═══════════════════════════════════════════════════════════════════════════════
 
 expression
-
     // ── Equality ─────────────────────────────────────────────────────────────
     : expression op=(EQ | NEQ) expression                               # equalityExpr
 
@@ -98,17 +96,12 @@ expression
 
     // ── Unary ────────────────────────────────────────────────────────────────
     | MINUS expression                                                   # unaryMinusExpr
+
     // ── Grouping ─────────────────────────────────────────────────────────────
     | LPAREN expression RPAREN                                          # parenExpr
 
-    // ── Built-in function calls ───────────────────────────────────────────────
-    | castCall                                                           # castExpr
-    | powCall                                                            # powExpr
-    | sqrtCall                                                           # sqrtExpr
-    | minCall                                                            # minExpr
-    | maxCall                                                            # maxExpr
-    | roundCall                                                          # roundExpr
-    | absCall                                                            # absExpr
+    // ── Built-in function calls (all grouped under one rule) ─────────────────
+    | builtinFunc                                                        # builtinExpr
 
     // ── Primaries ────────────────────────────────────────────────────────────
     | macroValue                                                         # macroExpr
@@ -121,10 +114,22 @@ expression
     ;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  BUILT-IN FUNCTION CALLS
-//  Arguments accept full expressions, not just bare identifiers — so
-//  pow(x + 1, 2) or sqrt(100) are both valid.
+//  BUILT-IN FUNCTIONS
+//  Grouped under one rule so expression stays clean and new functions only
+//  require adding an alternative here — nothing else changes.
 // ═══════════════════════════════════════════════════════════════════════════════
+
+builtinFunc
+    : castCall
+    | powCall
+    | sqrtCall
+    | minCall
+    | maxCall
+    | roundCall
+    | absCall
+    ;
+
+// ─── Individual call rules ────────────────────────────────────────────────────
 
 castCall
     : CAST LPAREN expression COMMA type RPAREN
@@ -194,7 +199,7 @@ whileStatement
     ;
 
 // ─── Try / Catch ──────────────────────────────────────────────────────────────
-// The catch block now accepts any number of statements, not just one print.
+// The catch block accepts any number of statements, not just one print.
 
 tryStatement
     : TRY block CATCH LPAREN IDENTIFIER RPAREN block
