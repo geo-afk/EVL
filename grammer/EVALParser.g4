@@ -9,20 +9,19 @@ program
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  STATEMENTS
-//  A statement is one executable unit.  Adding new constructs here (for, match,
-//  return …) only requires adding one alternative rather than touching a dozen
-//  rules as before.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 statement
     : variableDeclaration           // int x = 10
     | constDeclaration              // const int x = 10
     | assignment                    // x = 20  |  x += 5
-    | printStatement                // print("hello", x)
+    | incrementDecrement            // x++  |  x--
     | ifStatement                   // if (cond) { ... } else { ... }
     | whileStatement                // while (cond) { ... }
-    | tryStatement                  // try { ... } catch { ... }
-    | builtinFunc                   // standalone built-in call e.g. pow(x, 2)
+    | tryStatement                  // try { ... } catch(e) { ... }
+    | breakStatement                // break
+    | continueStatement             // continue
+    | builtinCallStatement          // standalone built-in call, e.g. print(...)
     | block                         // bare { ... }
     ;
 
@@ -56,6 +55,23 @@ assignOp
     | DIV_ASSIGN
     ;
 
+// ─── Increment / Decrement (postfix only) ─────────────────────────────────────
+// e.g.  x++   x--
+// Placing these as statements (not inside expression) avoids the classic
+// ambiguity between prefix/postfix uses and keeps the expression rule clean.
+
+incrementDecrement
+    : IDENTIFIER (INCREMENT | DECREMENT)
+    ;
+
+breakStatement
+    : BREAK
+    ;
+
+continueStatement
+    : CONTINUE
+    ;
+
 // ─── Type names ───────────────────────────────────────────────────────────────
 
 type
@@ -66,9 +82,7 @@ type
     ;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  EXPRESSIONS  (ordered by ascending precedence — ANTLR4 resolves ambiguity
-//  by preferring alternatives listed first, so lower-precedence operators
-//  appear first here and bind more loosely)
+//  EXPRESSIONS  (ordered by ascending precedence)
 //
 //  Precedence levels (lowest → highest):
 //    1. Logical OR            ||
@@ -79,28 +93,38 @@ type
 //    6. Multiplicative        *  /  %
 //    7. Unary                 -  !
 //    8. Primary               literal, identifier, macro, function call, (expr)
+//
+//  ANTLR4 resolves left-recursive ambiguity by favouring the earlier alternative
+//  so lower-precedence operators appear first.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 expression
-    // ── Equality ─────────────────────────────────────────────────────────────
-    : expression op=(EQ | NEQ) expression                               # equalityExpr
+    // ── Level 1 – Logical OR ─────────────────────────────────────────────────
+    : expression OR_OP expression                                        # logicalOrExpr
 
-    // ── Relational ───────────────────────────────────────────────────────────
+    // ── Level 2 – Logical AND ────────────────────────────────────────────────
+    | expression AND_OP expression                                       # logicalAndExpr
+
+    // ── Level 3 – Equality ───────────────────────────────────────────────────
+    | expression op=(EQ | NEQ) expression                               # equalityExpr
+
+    // ── Level 4 – Relational ─────────────────────────────────────────────────
     | expression op=(LT | GT | LTE | GTE) expression                   # relationalExpr
 
-    // ── Additive ─────────────────────────────────────────────────────────────
+    // ── Level 5 – Additive ───────────────────────────────────────────────────
     | expression op=(PLUS | MINUS) expression                           # additiveExpr
 
-    // ── Multiplicative ───────────────────────────────────────────────────────
+    // ── Level 6 – Multiplicative ─────────────────────────────────────────────
     | expression op=(MULTI | DIVIDE | MODULUS) expression               # multiplicativeExpr
 
-    // ── Unary ────────────────────────────────────────────────────────────────
+    // ── Level 7 – Unary ──────────────────────────────────────────────────────
     | MINUS expression                                                   # unaryMinusExpr
+    | NOT_OP expression                                                  # unaryNotExpr
 
-    // ── Grouping ─────────────────────────────────────────────────────────────
+    // ── Level 8 – Grouping ───────────────────────────────────────────────────
     | LPAREN expression RPAREN                                          # parenExpr
 
-    // ── Built-in function calls (all grouped under one rule) ─────────────────
+    // ── Built-in function calls ───────────────────────────────────────────────
     | builtinFunc                                                        # builtinExpr
 
     // ── Primaries ────────────────────────────────────────────────────────────
@@ -111,12 +135,15 @@ expression
     | STRING                                                             # stringLiteral
     | TRUE                                                               # trueLiteral
     | FALSE                                                              # falseLiteral
+    | NULL                                                               # nullLiteral
     ;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BUILT-IN FUNCTIONS
-//  Grouped under one rule so expression stays clean and new functions only
-//  require adding an alternative here — nothing else changes.
+//  Separated into builtinFunc (usable inside expressions) and
+//  builtinCallStatement (when used as a bare statement so the parser does not
+//  need to consider every expression as a potential statement, which would
+//  require an expressionStatement rule and risk introducing new ambiguities).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 builtinFunc
@@ -127,6 +154,12 @@ builtinFunc
     | maxCall
     | roundCall
     | absCall
+    ;
+
+// builtinCallStatement allows print (and any future void built-ins) to appear
+// as a standalone statement WITHOUT making every expression a valid statement.
+builtinCallStatement
+    : printStatement
     ;
 
 // ─── Individual call rules ────────────────────────────────────────────────────
@@ -172,16 +205,20 @@ macroValue
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  PRINT STATEMENT
+//
+//  FIX: The original rule had `STRING | expression` which caused an ambiguity
+//  because `expression` already includes a `stringLiteral` alternative.  The
+//  STRING-specific alternative has been removed; everything goes through
+//  expression, which covers STRING via the stringLiteral labelled alternative.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 printStatement
     : PRINT LPAREN printArg (COMMA printArg)* RPAREN
     ;
 
-// A print argument is either a string literal or any expression
+// FIX: removed standalone STRING alternative — expression already handles it.
 printArg
-    : STRING
-    | expression
+    : expression
     ;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -199,7 +236,6 @@ whileStatement
     ;
 
 // ─── Try / Catch ──────────────────────────────────────────────────────────────
-// The catch block accepts any number of statements, not just one print.
 
 tryStatement
     : TRY block CATCH LPAREN IDENTIFIER RPAREN block
