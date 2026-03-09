@@ -1,29 +1,34 @@
+from __future__ import annotations
+
+from symtable import Symbol
+from typing import Optional, Self, Dict
 import json
-from typing import Optional
 
 from app.eval.semantic_validation import SemanticValidation
-from app.models.Symbol import Symbol
+from app.models.Variable import Variable
+from app.models.custom_exceptions import ScopeException
 
 
 class Scope:
-    def __init__(self, parent: Optional["Scope"] = None, name: str = "global"):
+    def __init__(self, parent: Optional[Self] = None, name: str = "global"):
         self.parent   = parent
         self.name     = name
-        self._symbols: dict[str, Symbol] = {}
+        self.variables: Dict[str, Variable] = {}
 
 
-    @staticmethod
-    def push_scope(scope: "Scope", name: str = "block") -> "Scope":
-        scope = Scope(parent=scope, name=name)
-        return scope
+    @classmethod
+    def push_scope(cls, scope: "Scope", name: str = "block") -> "Scope":
+        """Create and return a new child scope."""
+        return cls(parent=scope, name=name)
 
 
-    @staticmethod
-    def pop_scope(current_scope: "Scope", validator: SemanticValidation) -> None:
+    @classmethod
+    def pop_scope(cls, current_scope: "Scope", validator: SemanticValidation) -> Optional["Scope"]:
+        """Pop the current scope and return the parent scope."""
         if current_scope.parent is None:
             validator.push_error(None, "Scope is empty")
-            return
-        current_scope = current_scope.parent
+            raise ScopeException("[Scope Error] Cannot exit global scope")
+        return current_scope.parent
 
 
 
@@ -36,10 +41,15 @@ class Scope:
 
     def resolve(self, name: str) -> Optional[Symbol]:
         """Walk the scope chain to find a symbol."""
-        if name in self._symbols:
-            return self._symbols[name]
-        if self.parent:
-            return self.parent.resolve(name)
+        try:
+            if name in self._symbols:
+                return self._symbols[name]
+            if self.parent:
+                return self.parent.resolve(name)
+        except Exception as e:
+            # Log error or handle appropriately
+            print(f"Error resolving symbol '{name}': {e}")
+            return None
         return None
 
 

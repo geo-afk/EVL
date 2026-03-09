@@ -71,6 +71,33 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by EVALParser#incrementDecrement.
+    def enterIncrementDecrement(self, ctx:EVALParser.IncrementDecrementContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#incrementDecrement.
+    def exitIncrementDecrement(self, ctx:EVALParser.IncrementDecrementContext):
+        pass
+
+
+    # Enter a parse tree produced by EVALParser#breakStatement.
+    def enterBreakStatement(self, ctx:EVALParser.BreakStatementContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#breakStatement.
+    def exitBreakStatement(self, ctx:EVALParser.BreakStatementContext):
+        pass
+
+
+    # Enter a parse tree produced by EVALParser#continueStatement.
+    def enterContinueStatement(self, ctx:EVALParser.ContinueStatementContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#continueStatement.
+    def exitContinueStatement(self, ctx:EVALParser.ContinueStatementContext):
+        pass
+
+
     # Enter a parse tree produced by EVALParser#type.
     def enterType(self, ctx:EVALParser.TypeContext):
         pass
@@ -80,12 +107,30 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by EVALParser#nullLiteral.
+    def enterNullLiteral(self, ctx:EVALParser.NullLiteralContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#nullLiteral.
+    def exitNullLiteral(self, ctx:EVALParser.NullLiteralContext):
+        pass
+
+
     # Enter a parse tree produced by EVALParser#builtinExpr.
     def enterBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
         pass
 
     # Exit a parse tree produced by EVALParser#builtinExpr.
     def exitBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
+        pass
+
+
+    # Enter a parse tree produced by EVALParser#logicalAndExpr.
+    def enterLogicalAndExpr(self, ctx:EVALParser.LogicalAndExprContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#logicalAndExpr.
+    def exitLogicalAndExpr(self, ctx:EVALParser.LogicalAndExprContext):
         pass
 
 
@@ -161,6 +206,15 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by EVALParser#logicalOrExpr.
+    def enterLogicalOrExpr(self, ctx:EVALParser.LogicalOrExprContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#logicalOrExpr.
+    def exitLogicalOrExpr(self, ctx:EVALParser.LogicalOrExprContext):
+        pass
+
+
     # Enter a parse tree produced by EVALParser#unaryMinusExpr.
     def enterUnaryMinusExpr(self, ctx:EVALParser.UnaryMinusExprContext):
         pass
@@ -188,6 +242,15 @@ class EVALParserListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by EVALParser#unaryNotExpr.
+    def enterUnaryNotExpr(self, ctx:EVALParser.UnaryNotExprContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#unaryNotExpr.
+    def exitUnaryNotExpr(self, ctx:EVALParser.UnaryNotExprContext):
+        pass
+
+
     # Enter a parse tree produced by EVALParser#multiplicativeExpr.
     def enterMultiplicativeExpr(self, ctx:EVALParser.MultiplicativeExprContext):
         pass
@@ -212,6 +275,15 @@ class EVALParserListener(ParseTreeListener):
 
     # Exit a parse tree produced by EVALParser#builtinFunc.
     def exitBuiltinFunc(self, ctx:EVALParser.BuiltinFuncContext):
+        pass
+
+
+    # Enter a parse tree produced by EVALParser#builtinCallStatement.
+    def enterBuiltinCallStatement(self, ctx:EVALParser.BuiltinCallStatementContext):
+        pass
+
+    # Exit a parse tree produced by EVALParser#builtinCallStatement.
+    def exitBuiltinCallStatement(self, ctx:EVALParser.BuiltinCallStatementContext):
         pass
 
 

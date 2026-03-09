@@ -44,13 +44,38 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by EVALParser#incrementDecrement.
+    def visitIncrementDecrement(self, ctx:EVALParser.IncrementDecrementContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by EVALParser#breakStatement.
+    def visitBreakStatement(self, ctx:EVALParser.BreakStatementContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by EVALParser#continueStatement.
+    def visitContinueStatement(self, ctx:EVALParser.ContinueStatementContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by EVALParser#type.
     def visitType(self, ctx:EVALParser.TypeContext):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by EVALParser#nullLiteral.
+    def visitNullLiteral(self, ctx:EVALParser.NullLiteralContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by EVALParser#builtinExpr.
     def visitBuiltinExpr(self, ctx:EVALParser.BuiltinExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by EVALParser#logicalAndExpr.
+    def visitLogicalAndExpr(self, ctx:EVALParser.LogicalAndExprContext):
         return self.visitChildren(ctx)
 
 
@@ -94,6 +119,11 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by EVALParser#logicalOrExpr.
+    def visitLogicalOrExpr(self, ctx:EVALParser.LogicalOrExprContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by EVALParser#unaryMinusExpr.
     def visitUnaryMinusExpr(self, ctx:EVALParser.UnaryMinusExprContext):
         return self.visitChildren(ctx)
@@ -109,6 +139,11 @@ class EVALParserVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by EVALParser#unaryNotExpr.
+    def visitUnaryNotExpr(self, ctx:EVALParser.UnaryNotExprContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by EVALParser#multiplicativeExpr.
     def visitMultiplicativeExpr(self, ctx:EVALParser.MultiplicativeExprContext):
         return self.visitChildren(ctx)
@@ -121,6 +156,11 @@ class EVALParserVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by EVALParser#builtinFunc.
     def visitBuiltinFunc(self, ctx:EVALParser.BuiltinFuncContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by EVALParser#builtinCallStatement.
+    def visitBuiltinCallStatement(self, ctx:EVALParser.BuiltinCallStatementContext):
         return self.visitChildren(ctx)
 
 

@@ -1,27 +1,50 @@
-from enum import Enum, auto
+from enum import Enum
+from typing import Any
 
 
-class EvalType(Enum):
-    INT    = auto()
-    FLOAT  = auto()
-    STRING = auto()
-    BOOL   = auto()
-    NULL   = auto()
-    UNKNOWN = auto()   # propagates on error to suppress cascade errors
+class EvalType(str, Enum):
+    INT = "int"
+    FLOAT = "float"
+    STRING = "string"
+    BOOL = "bool"
+    NULL = "null"
+    UNKNOWN = "unknown"
 
 
-# Map keyword strings → EvalType
-TYPE_MAP: dict[str, EvalType] = {
-    "int":    EvalType.INT,
-    "float":  EvalType.FLOAT,
-    "string": EvalType.STRING,
-    "bool":   EvalType.BOOL,
-}
 
-# Numeric types
-NUMERIC   = {EvalType.INT, EvalType.FLOAT}
+class TypeHandler:
+    _TYPE_HANDLERS = {
+        EvalType.INT: lambda x: int(x),
+        EvalType.FLOAT: lambda x: float(x),
+        EvalType.STRING: lambda x: str(x),
+        EvalType.BOOL: lambda x: bool(x),
+    }
+
+    # Numeric types
+    NUMERIC = {EvalType.INT, EvalType.FLOAT}
+
+    # Empty types
+    EMPTY = {EvalType.UNKNOWN, EvalType.NULL}
+
+    @staticmethod
+    def convert(value, type_enum: EvalType) -> Any:
+        handler = TypeHandler._TYPE_HANDLERS.get(type_enum)
+        return handler(value) if handler else None
+
+    @staticmethod
+    def is_valid_type(type_string: str) -> bool:
+        return type_string in [t.value for t in EvalType]
 
 
-# Empty TYPE
-NULL = {EvalType.UNKNOWN, None}
+    @staticmethod
+    def is_python_type(eval_type: Any) -> Any:
+
+        python_type_map = {
+            EvalType.INT: int,
+            EvalType.FLOAT: float,
+            EvalType.STRING: str,
+            EvalType.BOOL: bool,
+        }
+
+        return python_type_map[eval_type]
 

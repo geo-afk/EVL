@@ -1,7 +1,5 @@
-from antlr4.ParserRuleContext import ParserRuleContext
-
 from app.models.CustomError import ErrorResponse, WarningResponse
-from app.models.Types import EvalType, NUMERIC, NULL
+from app.models.Types import EvalType, NUMERIC, EMPTY
 from typing import List, Any
 
 
@@ -33,14 +31,12 @@ class SemanticValidation:
             op: str,
             lt: EvalType,
             rt: EvalType,
-            line: int,
-            col: int,
+            token: Any
     ) -> EvalType:
         for t in (lt, rt):
-            if t not in NULL and t not in NUMERIC:
+            if t not in EMPTY and t not in NUMERIC:
                 self.push_error(
-                    line_number=line,
-                    column_number=col,
+                    token,
                     message=f"operator '{op}' requires numeric operands, got {t.name}"
                 )
                 return EvalType.UNKNOWN
@@ -54,50 +50,52 @@ class SemanticValidation:
             op: str,
             lt: EvalType,
             rt: EvalType,
-            line: int,
-            col: int,
+            token: Any
     ) -> None:
         for t in (lt, rt):
             if t not in (EvalType.BOOL, EvalType.UNKNOWN, None):
-                self._warn(
+                self.push_warnings(
+                    token,
                     f"logical '{op}' used with non-bool operand {t.name}",
-                    line, col,
                 )
 
-    def require_numeric(self, expr_ctx, label: str) -> EvalType:
-        t = self.visit(expr_ctx)
-        if t not in (EvalType.UNKNOWN, None) and t not in NUMERIC:
-            self._error(
-                f"{label} must be numeric, got {t.name}",
-                expr_ctx.start.line,
-                expr_ctx.start.column,
+    def require_numeric(self,
+                        eval_type: Any,
+                        expr_ctx: Any, label: str
+        ) -> EvalType:
+        if eval_type not in EMPTY and eval_type not in NUMERIC:
+            self.push_error(
+                expr_ctx.start,
+                f"{label} must be numeric, got {eval_type.name}",
             )
             return EvalType.UNKNOWN
-        return t
-
+        return eval_type
 
 
     @staticmethod
-    def _tok_col_line(token) -> tuple[int, int]:
+    def tok_col_line(token) -> tuple[int, int]:
         column = token.column if token else 0
         line = token.line if token else 0
         return column, line
 
-    def push_error(self, token: , message: str):
+    def push_error(self, token: Any, message: str):
 
+        column, line = self.tok_col_line(token)
         self.errors.append(
             ErrorResponse(
                 message=message,
-                line_number=line_number,
-                column_number=column_number,
+                line_number=line,
+                column_number=column,
             )
         )
 
-    def push_warnings(self, line_number: int, column_number: int, message: str):
+    def push_warnings(self, token: Any, message: str):
+
+        column, line = self.tok_col_line(token)
         self.warnings.append(
             WarningResponse(
                 message=message,
-                line_number=line_number,
-                column_number=column_number,
+                line_number=line,
+                column_number=column,
             )
         )
