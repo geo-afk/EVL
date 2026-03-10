@@ -1,3 +1,4 @@
+from app.eval.variable_evaluator import Evaluator
 from app.models.CustomError import ErrorResponse, WarningResponse
 from app.eval.semantic_validation import SemanticValidation
 from app.models.custom_exceptions import EVALNameException
@@ -85,7 +86,6 @@ class SemanticAnalyzer(BaseVisitor):
             )
 
             self.variable_manager.define(variable)
-            print("Symbol: ",variable)
 
 
 
@@ -101,7 +101,6 @@ class SemanticAnalyzer(BaseVisitor):
             if variable:
                 variable.constant = True
                 self.variable_manager.define(variable)
-
         except EVALNameException as e :
             self.validator.push_error(
                 variable_declaration,
@@ -309,12 +308,6 @@ class SemanticAnalyzer(BaseVisitor):
         rt = self.visit(ctx.expression(1))
         op = ctx.op.text
 
-        print("AdditiveExpr: ", lt,op, rt)
-        # '+' is also valid for string concatenation
-        # if op == "+":
-        #     if lt == EvalType.STRING or rt == EvalType.STRING:
-        #         return EvalType.STRING
-        # return self.validator.numeric_result(op, lt, rt, ctx.start)
         return f"{lt} {op} {rt}"
 
     def visitMultiplicativeExpr(self, ctx: EVALParser.MultiplicativeExprContext) -> str:
@@ -322,18 +315,6 @@ class SemanticAnalyzer(BaseVisitor):
         rt = self.visit(ctx.expression(1))
         op = ctx.op.text
 
-        # # Static division-by-zero detection
-        # if op == "/" and hasattr(ctx.expression(1), "INTEGER"):
-        #     rhs_ctx = ctx.expression(1)
-        #     if hasattr(rhs_ctx, "INTEGER") and rhs_ctx.INTEGER() is not None:
-        #         if int(rhs_ctx.INTEGER().getText()) == 0:
-        #             self.validator.push_error(
-        #                 ctx.start,
-        #                 "division by zero (static)"
-        #             )
-        #
-        # return self.validator.numeric_result(op, lt, rt, ctx.start)
-        print("MultiplicativeExpr: ", lt, op, rt)
         return f"{lt} {op} {rt}"
 
 
@@ -422,65 +403,86 @@ class SemanticAnalyzer(BaseVisitor):
 
     def visitCastCall(self, ctx) -> int | float | None:
         expression = ctx.expression()
-        value = self.visit(expression)
+        value: Variable = self.visit(expression)
         target_text = ctx.type_().getText()
 
-        # TODO -> do number check
-        # self.validator.require_numeric(
-        #     0,
-        #     expression,
-        #     "cast argument"
-        # )
 
-        if type(target_text) is int:
-            return float(value)
+        if not isinstance(value, Variable):
+            self.validator.push_error(
+                expression,
+                f"cast argument should be a variable, got {target_text}"
+            )
+            return None
 
-        if type(target_text) is float:
-            return int(value)
+        if isinstance(value.value, Variable):
+            variable = self.variable_manager.get_variable(value.value.name)
+            variable.type = TypeHandler.get_eval_type(target_text)
+            self.variable_manager.define(variable)
+            return Evaluator.evaluate(variable.value)
 
-        #TODO
-        return None
+        if value.value is None or value.value == 0:
+            self.validator.push_warnings(
+                expression,
+                f"cast argument should be a number, got {target_text}"
+            )
+
+        value.type = TypeHandler.get_eval_type(target_text)
+        self.variable_manager.define(value)
+        return Evaluator.evaluate(value.value)
+
 
 
     def visitPowCall(self, ctx: EVALParser.PowCallContext) -> float | int:
 
         first_expression = ctx.expression(0)
-        self.visit(first_expression)
+        first_val = self.visit(first_expression)
 
         second_expression = ctx.expression(1)
-        self.visit(second_expression)
+        second_val = self.visit(second_expression)
 
 
+        if first_val is None or second_val is None:
+            self.validator.push_warnings(
+                first_expression,
+                f"first argument should be a number, got {first_val}"
+            )
+            self.validator.push_warnings(
+                second_expression,
+                f"second argument should be a number, got {second_val}"
+            )
 
-        # self.validator.require_numeric(
-        #     0,
-        #     first_expression,
-        #     "pow base"
-        # )
-        #
-        # self.validator.require_numeric(
-        #    0,
-        #     second_expression,
-        #     "pow exponent"
-        # )
-
-        # TODO
-        return pow(0, 0)
+        if isinstance(first_val, Variable) and isinstance(second_val, Variable):
+            ...
 
 
-    def visitSqrtCall(self, ctx: EVALParser.SqrtCallContext) -> float:
+        first = 0
+        second = 0
+
+        return pow(first, second)
+
+
+    def visitSqrtCall(self, ctx: EVALParser.SqrtCallContext) -> float | None:
 
         expression = ctx.expression()
-        self.visit(expression)
+        value = self.visit(expression)
 
-        # self.validator.require_numeric(
-        #     0,
-        #     expression,
-        #     "sqrt argument"
-        # )
+        if value is None :
+            self.validator.push_warnings(
+                expression,
+                f"Invalid Argument -> {value}"
+            )
 
-        # TODO
-        return sqrt(0)
+
+        if isinstance(value, Variable):
+            variable = self.variable_manager.get_variable(value.value.name)
+            return sqrt(variable.value)
+
+
+        if type(value) is int or type(value) is float:
+            return sqrt(value)
+
+
+        return None
 
     def visitMinCall(self, ctx: EVALParser.MinCallContext) -> float | int:
 
