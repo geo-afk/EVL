@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any
 
 
+
 class EvalType(str, Enum):
     INT = "int"
     FLOAT = "float"
@@ -47,4 +48,15 @@ class TypeHandler:
         }
 
         return python_type_map[eval_type]
+
+
+    @staticmethod
+    def get_eval_type(str_type: str) -> EvalType:
+        is_valid = TypeHandler.is_valid_type(str_type)
+
+        if is_valid:
+            return EvalType(str_type)
+
+        return EvalType.UNKNOWN
+
 

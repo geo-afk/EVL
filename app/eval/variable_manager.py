@@ -2,7 +2,7 @@ from app.models.Scope import Scope
 from typing import Any
 
 from app.models.Types import TypeHandler
-from app.models.Variable import Variable, Position
+from app.models.Variable import Variable
 from app.models.custom_exceptions import EVALTypeException, EVALNameException, EVALConstException
 
 
@@ -64,53 +64,41 @@ class VariableManager:
             )
         return value
 
-    def _find_scope(self, name: str) -> dict[str, Variable] | None:
+    def _find_scope(self, name: str) -> Scope| None:
         """
         Walk the scope stack from innermost outward.
         Returns the scope dict that contains the variable, or None.
         """
 
         scope = self._current_scope
-
         while scope is not None:
-            if name == scope.variables[name]:
+            if scope.variables.get(name) is not None:
                 return scope
             scope = scope.parent
-
         return None
 
 
     # ── Declaration ──────────────────────────────────────────────────────────
 
-    def declare(self, eval_type: str, name: str,
-                value: Any, line: int, column: int,
-                constant: bool = False,
-    ) -> Variable:
+    def define(self, variable: Variable ) -> Variable:
         """
-        Declare a new variable in the CURRENT scope.
+        Define a new variable in the CURRENT scope.
 
         Corresponds to grammar rules:
             variableDeclaration : type IDENTIFIER ASSIGN expression
             constDeclaration    : CONST variableDeclaration
         """
-        coerced = self._coerce(eval_type, value)
-        var = Variable(
-            name=name, type=eval_type, value=coerced,
-            constant=constant, position=Position(
-                line=line,
-                column=column,
-            ))
-
-        self._current_scope.variables[name] = var
-        return var
+        # coerced = self._coerce(eval_type, value)
+        self._current_scope.variables[variable.name] = variable
+        return self._current_scope.variables.get(variable.name)
 
 
     def get_variable(self, name: str) -> Variable:
         """Return the full Variable record (type, value, constant flag)."""
         scope = self._find_scope(name)
         if scope is None:
-            raise EVALNameException(f"Variable '{name}' is not defined.")
-        return scope[name]
+            raise EVALNameException(f"Variable '{name}' is not defined")
+        return scope.variables.get(name)
 
 
     def assign(self, name: str, value: Any) -> Any:
@@ -124,7 +112,7 @@ class VariableManager:
         if scope is None:
             raise EVALNameException(f"Variable '{name}' is not defined.")
 
-        var = scope[name]
+        var = scope.variables.get(name)
         if var.constant:
             raise EVALConstException(f"Cannot reassign const variable '{name}'.")
 

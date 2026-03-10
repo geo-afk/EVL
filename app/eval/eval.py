@@ -9,6 +9,33 @@ from app.eval.error_listener import EVALErrorListener
 from generated.EVALLexer import EVALLexer
 from generated.EVALParser import EVALParser
 
+structlog.configure(
+    processors=[
+        # Add line number and function name
+        structlog.processors.CallsiteParameterAdder(
+            {
+                structlog.processors.CallsiteParameter.FILENAME,
+                structlog.processors.CallsiteParameter.LINENO,
+                structlog.processors.CallsiteParameter.FUNC_NAME,
+            }
+        ),
+        # Filter log levels
+        structlog.stdlib.filter_by_level,
+        # Add logger name
+        structlog.stdlib.add_logger_name,
+        # Add log level
+        structlog.stdlib.add_log_level,
+        # Format the log message
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.dev.ConsoleRenderer()  # Pretty console output
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
 logger = structlog.get_logger(__name__)
 
 class EVALAnalyzer:
@@ -114,7 +141,8 @@ class EVALAnalyzer:
             return result
 
         except Exception as e:
-            logger.error("Semantic_analysis_failed", error=str(e))
+            # logger.error("Semantic_analysis_failed", error=str(e))
+            logger.error("Semantic_analysis_failed", error=str(e), exc_info=True)
 
             return {}
 

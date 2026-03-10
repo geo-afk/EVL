@@ -1,5 +1,6 @@
 int x = 10
 float y = 20.5
+int t = 10/ 5 + 23 - 6
 int sum = x + y  // Implicit conversion (weak typing)
 
 print("Sum:", sum)

@@ -1,5 +1,5 @@
 from app.models.CustomError import ErrorResponse, WarningResponse
-from app.models.Types import EvalType, NUMERIC, EMPTY
+from app.models.Types import EvalType, TypeHandler
 from typing import List, Any
 
 
@@ -34,7 +34,7 @@ class SemanticValidation:
             token: Any
     ) -> EvalType:
         for t in (lt, rt):
-            if t not in EMPTY and t not in NUMERIC:
+            if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
                 self.push_error(
                     token,
                     message=f"operator '{op}' requires numeric operands, got {t.name}"
@@ -61,9 +61,10 @@ class SemanticValidation:
 
     def require_numeric(self,
                         eval_type: Any,
-                        expr_ctx: Any, label: str
+                        expr_ctx: Any,
+                        label: str
         ) -> EvalType:
-        if eval_type not in EMPTY and eval_type not in NUMERIC:
+        if eval_type not in TypeHandler.EMPTY and eval_type not in TypeHandler.NUMERIC:
             self.push_error(
                 expr_ctx.start,
                 f"{label} must be numeric, got {eval_type.name}",

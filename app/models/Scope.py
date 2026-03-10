@@ -16,6 +16,10 @@ class Scope:
         self.variables: Dict[str, Variable] = {}
 
 
+    def __str__(self) -> str:
+        return f"Scope({self.name}) -> {self.variables}"
+
+
     @classmethod
     def push_scope(cls, scope: "Scope", name: str = "block") -> "Scope":
         """Create and return a new child scope."""
@@ -32,37 +36,16 @@ class Scope:
 
 
 
-    def define(self, sym: Symbol) -> bool:
-        """Register symbol in THIS scope. Returns False if already declared."""
-        if sym.name in self._symbols:
-            return False
-        self._symbols[sym.name] = sym
-        return True
-
-    def resolve(self, name: str) -> Optional[Symbol]:
-        """Walk the scope chain to find a symbol."""
-        try:
-            if name in self._symbols:
-                return self._symbols[name]
-            if self.parent:
-                return self.parent.resolve(name)
-        except Exception as e:
-            # Log error or handle appropriately
-            print(f"Error resolving symbol '{name}': {e}")
-            return None
-        return None
-
-
     def snapshot(self) -> str:
         """Return a JSON representation of this scope's symbols."""
         data = {
             name: {
-                "type": sym.eval_type.name,
-                "const": sym.is_const,
-                "line": sym.line,
-                "column": sym.column,
+                "type": sym.type,
+                "const": sym.constant,
+                "line": sym.position.line,
+                "column": sym.position.column,
             }
-            for name, sym in self._symbols.items()
+            for name, sym in self.variables.items()
         }
 
         return json.dumps(data, indent=4)

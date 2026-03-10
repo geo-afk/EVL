@@ -1,12 +1,14 @@
 from app.models.CustomError import ErrorResponse, WarningResponse
 from app.eval.semantic_validation import SemanticValidation
-from app.models.Types import EvalType, NUMERIC, TYPE_MAP, EMPTY
-from generated.EVALParser import EVALParser
+from app.models.custom_exceptions import EVALNameException
+from app.eval.variable_manager import VariableManager
+from app.models.Types import EvalType, TypeHandler
 from app.models.Variable import Variable, Position
-from app.models.Scope import Scope
+from generated.EVALParser import EVALParser
+from app.eval.postfix import Postfix
 from datetime import datetime
 from typing import List, Any
-from math import pi
+from math import pi, sqrt
 
 try:
     from generated.EVALParserVisitor import EVALParserVisitor as BaseVisitor
@@ -24,136 +26,125 @@ class SemanticAnalyzer(BaseVisitor):
     """
 
     def __init__(self):
-        self._global_scope  = Scope(name="global")
-        self._current_scope = self._global_scope
-        self._loop_depth    = 0       # tracks nesting depth for break/continue
+        self._loop_depth = 0
 
         self.errors:   List[ErrorResponse] = []
         self.warnings: List[WarningResponse] = []
 
         self.validator = SemanticValidation()
 
+        self.variable_manager = VariableManager(
+            validator=self.validator
+        )
+
+
+        self.postfix = Postfix()
+
 
     def visitProgram(self, ctx) -> None:
-        self.visitChildren(ctx)
+        return self.visitChildren(ctx)
 
 
     def visitBlock(self, ctx) -> None:
-        self._current_scope = Scope.push_scope(
-            self._current_scope
-        )
-
+        self.variable_manager.enter_scope("block")
 
         for stmt in ctx.statement():
             self.visit(stmt)
 
-        self._current_scope = Scope.pop_scope(
-            self._current_scope,
-            validator=self.validator,
-        )
-
-    @staticmethod
-    def _tok_line(token) -> int:
-        return token.line if token else 0
-
-    @staticmethod
-    def _tok_col(token) -> int:
-        return token.column if token else 0
+        self.variable_manager.exit_scope()
 
 
     def visitVariableDeclaration(self, ctx: EVALParser.VariableDeclarationContext) -> None:
         type_text  = ctx.type_().getText()
-        decl_type  = TYPE_MAP.get(type_text, EvalType.UNKNOWN)
+        decl_type  = TypeHandler.get_eval_type(type_text)
         ident_tok  = ctx.IDENTIFIER().getSymbol()
         name       = ident_tok.text
 
-        expr_type = self.visit(ctx.expression())
+        try:
+            variable = self.variable_manager.get_variable(name)
 
-        # Type-compatibility check
-        if expr_type not in (EvalType.UNKNOWN, None):
-            if decl_type != EvalType.UNKNOWN:
-                compatible = self.validator.types_compatible(decl_type, expr_type)
-                if not compatible:
+            if variable:
+                self.validator.push_error(
+                    ident_tok,
+                    f"variable {name} is already defines"
+                )
 
-                    self.validator.push_error(
-                        ident_tok,
-                        f"cannot assign {expr_type.name} to variable of type {decl_type.name} '{name}'"
-                    )
-                elif decl_type == EvalType.FLOAT and expr_type == EvalType.INT:
+        except EVALNameException:
 
-                    self.validator.push_warnings(
-                        ident_tok,
-                        f"implicit int→float conversion when assigning to '{name}'",
-                    )
+            var_value = self.visit(ctx.expression())
 
-        column, line = self.validator.tok_col_line(ident_tok)
-        variable = Variable(
-            name=name,
-            type=decl_type,
-            value=0,
-            position= Position(
-                line=line,
-                column=column
+            column, line = self.validator.tok_col_line(ident_tok)
+            variable = Variable(
+                name=name,
+                type=decl_type,
+                value=var_value,
+                position= Position(
+                    line=line,
+                    column=column
+                )
             )
-        )
-        print("Symbol: ",variable)
-        if not self._current_scope.define(sym):
 
-            self.validator.push_error(
-                ident_tok,
-                f"variable '{name}' already declared in this scope"
-            )
+            self.variable_manager.define(variable)
+            print("Symbol: ",variable)
+
 
 
     def visitConstDeclaration(self, ctx: EVALParser.ConstDeclarationContext) -> None:
-        # Visit the inner variableDeclaration first to register the symbol …
+
         variable_declaration = ctx.variableDeclaration()
         self.visit(variable_declaration)
-        # … then mark the symbol as const.
-        name = variable_declaration.IDENTIFIER().getSymbol().text
-        sym  = self._current_scope.resolve(name)
-        if sym:
-            sym.is_const = True
+
+        name = variable_declaration.IDENTIFIER().getText()
+
+        try:
+            variable = self.variable_manager.get_variable(name)
+            if variable:
+                variable.constant = True
+                self.variable_manager.define(variable)
+
+        except EVALNameException as e :
+            self.validator.push_error(
+                variable_declaration,
+                f"{e} in this scope"
+            )
+            return
+
+
 
 
     def visitAssignment(self, ctx: EVALParser.AssignmentContext) -> None:
         ident_tok = ctx.IDENTIFIER().getSymbol()
         name      = ident_tok.text
 
-        sym = self._current_scope.resolve(name)
-        if sym is None:
-            self.validator.push_error(
-                ident_tok,
-                f"assignment to undeclared variable '{name}'"
-            )
+        try:
+            variable = self.variable_manager.get_variable(name)
 
-            self.visit(ctx.expression())
-            return
-
-        if sym.is_const:
-            self.validator.push_error(
-                ident_tok,
-                f"cannot reassign const variable '{name}'"
-            )
-
-        expr_type = self.visit(ctx.expression())
-        op_text   = ctx.assignOp().getText()
-
-        # Compound operators (+=, -= etc.) require numeric operands
-        if op_text != "=" and sym.eval_type not in NUMERIC:
-            self.validator.push_error(
-                ident_tok,
-
-                f"compound assignment '{op_text}' requires a numeric variable; '{name}' is {sym.eval_type.name}",
-            )
-
-
-        if expr_type not in (EvalType.UNKNOWN, None):
-            if not self.validator.types_compatible(sym.eval_type, expr_type):
+            if variable is None:
                 self.validator.push_error(
                     ident_tok,
-                    f"type mismatch: cannot assign {expr_type.name} to '{name}' ({sym.eval_type.name})",
+                    f"assignment to undeclared variable '{name}'"
                 )
+
+                return
+
+            if variable.constant:
+                self.validator.push_error(
+                    ident_tok,
+                    f"cannot reassign const variable '{name}'"
+                )
+            value = self.visit(ctx.expression())
+
+            variable.value = value
+            self.variable_manager.define(variable)
+
+        except EVALNameException as e :
+            self.validator.push_error(
+                ident_tok,
+                f"{e} in this scope"
+            )
+            return
+
+
 
 
 
@@ -161,26 +152,27 @@ class SemanticAnalyzer(BaseVisitor):
         ident_tok = ctx.IDENTIFIER().getSymbol()
         name      = ident_tok.text
 
-        sym = self._current_scope.resolve(name)
-        if sym is None:
+
+        variable = self.variable_manager.get_variable(name)
+        if variable is None:
             self.validator.push_error(
                 ident_tok,
                 f"use of undeclared variable '{name}'"
             )
 
             return
-        if sym.is_const:
+        if variable.constant:
             op = ctx.INCREMENT() and "++" or "--"
             self.validator.push_error(
                 ident_tok,
                 f"cannot apply '{op}' to const variable '{name}'"
             )
 
-        if sym.eval_type not in NUMERIC:
+        if variable.type not in TypeHandler.NUMERIC:
             op = "++" if ctx.INCREMENT() else "--"
             self.validator.push_error(
                 ident_tok,
-                f"'{op}' requires a numeric variable; '{name}' is {sym.eval_type.name}",
+                f"'{op}' requires a numeric variable; '{name}' is {variable.type}",
 
             )
 
@@ -229,29 +221,23 @@ class SemanticAnalyzer(BaseVisitor):
 
         # Introduce catch variable into catch scope
 
-        self._current_scope = Scope.push_scope(
-            self._current_scope,
-            name="catch"
-        )
+        self.variable_manager.enter_scope("catch")
 
         ident_tok = ctx.IDENTIFIER().getSymbol()
-        catch_sym = Symbol(
-            name=ident_tok.text,
-            eval_type=EvalType.UNKNOWN,  # exception object — type unknown at static time
-            line=self._tok_line(ident_tok),
-            column=self._tok_col(ident_tok),
-        )
-        print("Catch: ", catch_sym)
-        self._current_scope.define(catch_sym)
+        # catch_sym = Symbol(
+        #     name=ident_tok.text,
+        #     eval_type=EvalType.UNKNOWN,  # exception object — type unknown at static time
+        #     line=self._tok_line(ident_tok),
+        #     column=self._tok_col(ident_tok),
+        # )
+        # print("Catch: ", catch_sym)
+        # self._current_scope.define(catch_sym)
         # Visit the catch block body statements directly so we don't double-push scope
         catch_block = blocks[1]
         for stmt in catch_block.statement():
             self.visit(stmt)
 
-        self._current_scope = Scope.pop_scope(
-            self._current_scope,
-            self.validator
-        )
+        self.variable_manager.exit_scope()
 
     # ── breakStatement ─────────────────────────────────────────────────────
 
@@ -292,8 +278,8 @@ class SemanticAnalyzer(BaseVisitor):
         lt = self.visit(ctx.expression(0))
         rt = self.visit(ctx.expression(1))
         if (
-            lt not in EMPTY
-            and rt not in EMPTY
+            lt not in TypeHandler.EMPTY
+            and rt not in TypeHandler.EMPTY
             and not self.validator.types_compatible(lt, rt)
         ):
 
@@ -308,7 +294,7 @@ class SemanticAnalyzer(BaseVisitor):
         lt = self.visit(ctx.expression(0))
         rt = self.visit(ctx.expression(1))
         for t in (lt, rt):
-            if t not in EMPTY and t not in NUMERIC:
+            if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
 
                 self.validator.push_error(
                     ctx.start,
@@ -318,46 +304,54 @@ class SemanticAnalyzer(BaseVisitor):
                 return EvalType.UNKNOWN
         return EvalType.BOOL
 
-    def visitAdditiveExpr(self, ctx: EVALParser.AdditiveExprContext) -> EvalType:
+    def visitAdditiveExpr(self, ctx: EVALParser.AdditiveExprContext) -> str:
         lt = self.visit(ctx.expression(0))
         rt = self.visit(ctx.expression(1))
         op = ctx.op.text
+
+        print("AdditiveExpr: ", lt,op, rt)
         # '+' is also valid for string concatenation
-        if op == "+":
-            if lt == EvalType.STRING or rt == EvalType.STRING:
-                return EvalType.STRING
-        return self.validator.numeric_result(op, lt, rt, ctx.start)
+        # if op == "+":
+        #     if lt == EvalType.STRING or rt == EvalType.STRING:
+        #         return EvalType.STRING
+        # return self.validator.numeric_result(op, lt, rt, ctx.start)
+        return f"{lt} {op} {rt}"
 
-    def visitMultiplicativeExpr(self, ctx: EVALParser.MultiplicativeExprContext) -> EvalType:
+    def visitMultiplicativeExpr(self, ctx: EVALParser.MultiplicativeExprContext) -> str:
         lt = self.visit(ctx.expression(0))
         rt = self.visit(ctx.expression(1))
         op = ctx.op.text
 
-        # Static division-by-zero detection
-        if op == "/" and hasattr(ctx.expression(1), "INTEGER"):
-            rhs_ctx = ctx.expression(1)
-            if hasattr(rhs_ctx, "INTEGER") and rhs_ctx.INTEGER() is not None:
-                if int(rhs_ctx.INTEGER().getText()) == 0:
-                    self.validator.push_error(
-                        ctx.start,
-                        "division by zero (static)"
-                    )
+        # # Static division-by-zero detection
+        # if op == "/" and hasattr(ctx.expression(1), "INTEGER"):
+        #     rhs_ctx = ctx.expression(1)
+        #     if hasattr(rhs_ctx, "INTEGER") and rhs_ctx.INTEGER() is not None:
+        #         if int(rhs_ctx.INTEGER().getText()) == 0:
+        #             self.validator.push_error(
+        #                 ctx.start,
+        #                 "division by zero (static)"
+        #             )
+        #
+        # return self.validator.numeric_result(op, lt, rt, ctx.start)
+        print("MultiplicativeExpr: ", lt, op, rt)
+        return f"{lt} {op} {rt}"
 
-        return self.validator.numeric_result(op, lt, rt, ctx.start)
 
     def visitUnaryMinusExpr(self, ctx: EVALParser.UnaryMinusExprContext) -> EvalType:
         t = self.visit(ctx.expression())
-        if t not in EMPTY and t not in NUMERIC:
+        if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
 
             self.validator.push_error(
                 ctx.start,
                 f"unary '-' requires a numeric operand, got {t.name}"
             )
 
-        return t if t in NUMERIC else EvalType.UNKNOWN
+        return t if t in TypeHandler.NUMERIC else EvalType.UNKNOWN
 
+    # TODO
     def visitUnaryNotExpr(self, ctx: EVALParser.UnaryNotExprContext) -> EvalType:
         t = self.visit(ctx.expression())
+
         if t not in (EvalType.BOOL, EvalType.UNKNOWN, None):
 
             self.validator.push_warnings(
@@ -365,6 +359,7 @@ class SemanticAnalyzer(BaseVisitor):
                 f"'!' applied to {t.name} — expected bool",
             )
 
+        # TODO
         return EvalType.BOOL
 
     def visitParenExpr(self, ctx: EVALParser.ParenExprContext) -> EvalType:
@@ -373,139 +368,207 @@ class SemanticAnalyzer(BaseVisitor):
     def visitBuiltinExpr(self, ctx: EVALParser.BuiltinExprContext) -> EvalType:
         return self.visit(ctx.builtinFunc())
 
-    # ── Primaries ──────────────────────────────────────────────────────────
 
-    def visitIdentExpr(self, ctx: EVALParser.IdentExprContext) -> EvalType:
+    def visitIdentExpr(self, ctx: EVALParser.IdentExprContext) -> Variable | None:
         tok  = ctx.IDENTIFIER().getSymbol()
         name = tok.text
-        sym  = self._current_scope.resolve(name)
-        if sym is None:
+
+
+        try:
+            variable = self.variable_manager.get_variable(name)
+            return variable
+        except Exception as e:
             self.validator.push_error(
-                tok,
-                f"use of undeclared variable '{name}'"
+                ctx.start,
+                str(e)
             )
+            return None
 
-            return EvalType.UNKNOWN
-        return sym.eval_type
 
-    def visitIntLiteral(self, _ctx) -> EvalType:
-        return EvalType.INT
+    def visitIntLiteral(self, ctx) -> int:
 
-    def visitRealLiteral(self, _ctx) -> EvalType:
-        return EvalType.FLOAT
+        int_literal = ctx.INTEGER().getText()
+        return int(int_literal)
 
-    def visitStringLiteral(self, _ctx) -> EvalType:
-        return EvalType.STRING
+    def visitRealLiteral(self, ctx) -> float:
+        float_literal = ctx.REAL().getText()
+        return float(float_literal)
 
-    def visitTrueLiteral(self, _ctx) -> EvalType:
-        return EvalType.BOOL
+    def visitStringLiteral(self, ctx) -> str:
+        return ctx.STRING().getText()
 
-    def visitFalseLiteral(self, _ctx) -> EvalType:
-        return EvalType.BOOL
+    def visitTrueLiteral(self, ctx) -> bool:
+        bool_literal = ctx.TrueLiteral().getText()
+        return bool(bool_literal)
 
-    def visitNullLiteral(self, _ctx) -> EvalType:
-        return EvalType.NULL
+    def visitFalseLiteral(self, ctx) -> bool:
+        bool_literal = ctx.TrueLiteral().getText()
+        return bool(bool_literal)
+
+    def visitNullLiteral(self, _ctx) -> None:
+        return None
+
+
 
     def visitMacroExpr(self, ctx: EVALParser.MacroExprContext):
         return self.visit(ctx.macroValue())
+
+
 
     # ── Built-in functions ─────────────────────────────────────────────────
 
     def visitBuiltinFunc(self, ctx: EVALParser.BuiltinFuncContext) -> EvalType:
         return self.visitChildren(ctx) or EvalType.UNKNOWN
 
-    def visitCastCall(self, ctx) -> EvalType:
-        self.visit(ctx.expression())
+    def visitCastCall(self, ctx) -> int | float | None:
+        expression = ctx.expression()
+        value = self.visit(expression)
         target_text = ctx.type_().getText()
-        return TYPE_MAP.get(target_text, EvalType.UNKNOWN)
+
+        # TODO -> do number check
+        # self.validator.require_numeric(
+        #     0,
+        #     expression,
+        #     "cast argument"
+        # )
+
+        if type(target_text) is int:
+            return float(value)
+
+        if type(target_text) is float:
+            return int(value)
+
+        #TODO
+        return None
 
 
-    def visitPowCall(self, ctx: EVALParser.PowCallContext) -> EvalType:
-
-        first_expression = ctx.expression(0)
-        second_expression = ctx.expression(1)
-
-        self.validator.require_numeric(
-            self.visit(first_expression),
-            first_expression,
-            "pow base"
-        )
-
-        self.validator.require_numeric(
-            self.visit(second_expression),
-            second_expression,
-            "pow exponent"
-        )
-        return EvalType.FLOAT
-
-    def visitSqrtCall(self, ctx: EVALParser.SqrtCallContext) -> EvalType:
-
-        expression = ctx.expression()
-
-        self.validator.require_numeric(
-            self.visit(expression),
-            expression,
-            "sqrt argument"
-        )
-        return EvalType.FLOAT
-
-    def visitMinCall(self, ctx: EVALParser.MinCallContext) -> EvalType:
+    def visitPowCall(self, ctx: EVALParser.PowCallContext) -> float | int:
 
         first_expression = ctx.expression(0)
+        self.visit(first_expression)
+
         second_expression = ctx.expression(1)
+        self.visit(second_expression)
 
-        self.validator.require_numeric(
-            self.visit(first_expression),
-            first_expression,
-            "min first argument"
-        )
 
-        self.validator.require_numeric(
-            self.visit(second_expression),
-            second_expression,
-            "min second argument"
-        )
-        return EvalType.FLOAT
 
-    def visitMaxCall(self, ctx: EVALParser.MaxCallContext) -> EvalType:
+        # self.validator.require_numeric(
+        #     0,
+        #     first_expression,
+        #     "pow base"
+        # )
+        #
+        # self.validator.require_numeric(
+        #    0,
+        #     second_expression,
+        #     "pow exponent"
+        # )
+
+        # TODO
+        return pow(0, 0)
+
+
+    def visitSqrtCall(self, ctx: EVALParser.SqrtCallContext) -> float:
+
+        expression = ctx.expression()
+        self.visit(expression)
+
+        # self.validator.require_numeric(
+        #     0,
+        #     expression,
+        #     "sqrt argument"
+        # )
+
+        # TODO
+        return sqrt(0)
+
+    def visitMinCall(self, ctx: EVALParser.MinCallContext) -> float | int:
 
         first_expression = ctx.expression(0)
+        self.visit(first_expression)
+
         second_expression = ctx.expression(1)
-        self.validator.require_numeric(
-            self.visit(first_expression),
-            first_expression,
-            "max first argument"
-        )
+        self.visit(second_expression)
 
-        self.validator.require_numeric(
-            self.visit(second_expression),
-            second_expression,
-            "max second argument"
-        )
-        return EvalType.FLOAT
+        # self.validator.require_numeric(
+        #     0,
+        #     first_expression,
+        #     "min first argument"
+        # )
+        #
+        # self.validator.require_numeric(
+        #     0,
+        #     second_expression,
+        #     "min second argument"
+        # )
 
-    def visitRoundCall(self, ctx: EVALParser.RoundCallContext) -> EvalType:
+        # TODO -> check if the variables are the same type...
+
+        # TODO
+        return min(0, 0)
+
+    def visitMaxCall(self, ctx: EVALParser.MaxCallContext) -> float | int:
+
+        first_expression = ctx.expression(0)
+        self.visit(first_expression)
+
+        second_expression = ctx.expression(1)
+        self.visit(second_expression)
+
+        # self.validator.require_numeric(
+        #     0,
+        #     first_expression,
+        #     "max first argument"
+        # )
+
+        # self.validator.require_numeric(
+        #     0,
+        #     second_expression,
+        #     "max second argument"
+        # )
+
+
+        #TODO -> check if the variables are the same type...
+
+        # TODO
+        return max(0, 0)
+
+
+    def visitRoundCall(self, ctx: EVALParser.RoundCallContext) -> float:
         expression = ctx.expression()
+        self.visit(expression)
 
-        self.validator.require_numeric(
-            self.visit(expression),
-            expression,
-            "round argument"
+        # self.validator.require_numeric(
+        #     0,
+        #     expression,
+        #     "round argument"
+        # )
+
+        result = self.postfix.get_result(
+            expression=expression
         )
-        return EvalType.INT
+        # TODO
+        return round(10.523, 2)
 
-    def visitAbsCall(self, ctx: EVALParser.AbsCallContext) -> EvalType:
+    def visitAbsCall(self, ctx: EVALParser.AbsCallContext) -> float:
         expression = ctx.expression()
+        self.visit(expression)
 
-        return self.validator.require_numeric(
-            self.visit(expression),
-            expression,
-            "abs argument"
+        # self.validator.require_numeric(
+        #     0,
+        #     expression,
+        #     "abs argument"
+        # )
+
+        result = self.postfix.get_result(
+            expression=expression
         )
+
+        # TODO
+        return abs(result)
 
 
     def visitMacroValue(self, ctx: EVALParser.MacroValueContext) -> Any:
-
         if ctx.PI():
             return pi
 
@@ -522,4 +585,3 @@ class SemanticAnalyzer(BaseVisitor):
             return now.year
 
         return None
-
