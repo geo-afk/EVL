@@ -1,0 +1,151 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  EXISTING PROGRAM — retained to verify original rules still pass / fire
+// ═══════════════════════════════════════════════════════════════════════════
+
+int x = 10
+float y = 20.5
+int t = 10/ 5 + 23 - 6
+float jj = 33
+int sum = x + y  // WARNING: implicit narrowing — float result assigned to int
+
+print("Sum:", sum)
+
+
+int age = 20
+
+int count = 10
+while (count > 5){
+    age +=1
+    count -= 1
+}
+
+const int newVal = cast(y, int)   // OK: cast target (int) matches declared type (int)
+
+
+float pi = PI
+int dayOfWeek = DAYS_IN_WEEK
+int hourInDay =  HOURS_IN_DAY
+int year = YEAR
+
+int by = 0
+int number = 10
+
+float g = pow(number, by)
+
+float val = sqrt(g)
+float minimum = min(cast(y, int), cast(x, int))
+
+int t = 10      // ERROR: duplicate declaration of 't' in the same scope
+int w = 23
+int maxVal = max(t, w)
+float value = round(y)
+
+
+try {
+  int result = 100 / 0
+} catch(a) {
+  print("Error: Division by zero!", a)
+}
+
+float c = 20 + 40 * 40  // Correctly evaluates to 1620
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — reserved-name violations
+//  Rule: no variable may share its name with a keyword, built-in function,
+//        type name, or macro constant.
+// ═══════════════════════════════════════════════════════════════════════════
+
+int int = 5           // ERROR: 'int' is a reserved type keyword
+float float = 3.14    // ERROR: 'float' is a reserved type keyword
+bool true = true      // ERROR: 'true' is a reserved literal keyword
+int while = 0         // ERROR: 'while' is a reserved control-flow keyword
+float sqrt = 2.0      // ERROR: 'sqrt' is a reserved built-in function name
+int PI = 3            // ERROR: 'PI' is a reserved macro constant
+int null = 0          // ERROR: 'null' is a reserved literal keyword
+int print = 1         // ERROR: 'print' is a reserved built-in function name
+int cast = 0          // ERROR: 'cast' is a reserved built-in function name
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — cast-target / declared-type consistency
+//  Rule: when the initialiser is directly cast(expr, T), the cast target T
+//        must match the declared variable type.
+// ═══════════════════════════════════════════════════════════════════════════
+
+float castSource = 9.7
+
+// Correct casts — target type matches declared type
+int   correctIntCast   = cast(castSource, int)    // OK
+float correctFloatCast = cast(castSource, float)  // OK
+
+// Mismatched casts — target type DOES NOT match declared type
+int   badCastToFloat = cast(castSource, float)  // ERROR: cast->float, declared int
+float badCastToInt   = cast(castSource, int)    // ERROR: cast->int,   declared float
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — try/catch reserved-name guard
+//  Rule: the catch parameter is a variable declaration and must not use a
+//        reserved identifier.
+// ═══════════════════════════════════════════════════════════════════════════
+
+try {
+    int riskyDiv = 10 / 0
+} catch(int) {           // ERROR: 'int' is reserved — invalid catch parameter
+    print("caught")
+}
+
+try {
+    int riskyDiv2 = 10 / 0
+} catch(err) {           // OK: 'err' is not reserved
+    print("caught safely", err)
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — implicit narrowing warning
+//  Rule: assigning a float-typed expression to an int variable emits a
+//        warning because the fractional part is silently discarded.
+// ═══════════════════════════════════════════════════════════════════════════
+
+float floatVal = 7.9
+int narrowed = floatVal   // WARNING: implicit narrowing — float to int
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — modulo on float operands (warning)
+//  Rule: '%' on floats is legal at runtime but almost always unintentional;
+//        a warning is emitted so the programmer can cast explicitly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+float fa = 5.5
+float fb = 2.0
+float floatMod = fa % fb  // WARNING: modulo on float operands
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — float equality / inequality (warning)
+//  Rule: IEEE 754 arithmetic means float == / != comparisons are unreliable;
+//        a warning is emitted recommending an epsilon-based approach.
+// ═══════════════════════════════════════════════════════════════════════════
+
+float fx = 0.1
+float fy = 0.2
+float fz = 0.3
+bool eqCheck = fx == fy   // WARNING: float equality comparison
+bool neqCheck = fx != fz  // WARNING: float inequality comparison
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW TESTS — shadow variable warning
+//  Rule: redeclaring a name that is visible from an outer scope is legal
+//        but is almost always a latent bug; a warning is emitted.
+// ═══════════════════════════════════════════════════════════════════════════
+
+int outerVar = 100
+{
+    int outerVar = 200  // WARNING: shadows outer-scope 'outerVar'
+    print("inner outerVar:", outerVar)
+}
+print("outer outerVar:", outerVar)

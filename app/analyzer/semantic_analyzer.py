@@ -43,6 +43,28 @@ class SemanticAnalyzer(BaseVisitor):
 
     # ── Internal convenience ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _direct_cast_type(expr_ctx: Any) -> "EvalType | None":
+        """
+        If *expr_ctx* is a top-level ``cast(…, T)`` call, return the declared
+        target EvalType *T*.  Returns ``None`` for any other expression shape.
+
+        This is used by ``visitVariableDeclaration`` to enforce the rule that
+        the result of an explicit cast must match the variable's declared type
+        (e.g. ``int x = cast(y, float)`` is an error).
+
+        Only the *direct* top-level expression is inspected; a cast nested
+        inside another call (e.g. ``min(cast(…), …)``) is intentionally left
+        unchecked because the outer function may widen the result.
+        """
+        if not isinstance(expr_ctx, EVALParser.BuiltinExprContext):
+            return None
+        builtin_func = expr_ctx.builtinFunc()
+        cast_ctx = builtin_func.castCall()
+        if cast_ctx is None:
+            return None
+        return TypeHandler.get_eval_type(cast_ctx.type_().getText())
+
     def _record(
         self,
         phase:       str,
@@ -116,7 +138,36 @@ class SemanticAnalyzer(BaseVisitor):
         name = ident_tok.text
         line = ident_tok.line
 
+        # ── 1. Reserved-name guard ───────────────────────────────────────────
+        # Variable names must not clash with any language keyword, built-in
+        # function, type name, or macro constant.  This mirrors the rule
+        # enforced by C, Java, Python, and virtually every compiled language.
+        if self.validator.check_reserved_name(name, ident_tok):
+            self._record(
+                phase="declaration",
+                title=f"Reserved name: {name}",
+                description=(
+                    f"'{name}' is a reserved identifier and cannot be used "
+                    f"as a variable name."
+                ),
+                line=line,
+                changed=name,
+                detail="error: reserved identifier",
+            )
+            return  # Cannot safely proceed; stop processing this declaration
 
+        # ── 2. Shadow warning ────────────────────────────────────────────────
+        # Shadowing an outer-scope variable is legal but almost always a bug.
+        # Languages like Java (-Xlint:shadow) and Rust warn about this by
+        # default; we do too.
+        self.validator.check_shadow(
+            name=name,
+            token=ident_tok,
+            is_in_current=self.variable_manager.is_defined_in_current_scope(name),
+            exists_outer=self.variable_manager.exists(name),
+        )
+
+        # ── 3. Duplicate declaration in same scope ───────────────────────────
         if self.variable_manager.is_defined_in_current_scope(name):
             msg = (
                 f"Variable '{name}' is already declared in the current scope "
@@ -133,10 +184,38 @@ class SemanticAnalyzer(BaseVisitor):
             )
             # raise DeclarationException(msg)
 
+        # ── 4. Evaluate the initialiser expression ───────────────────────────
         var_value = self.visit(ctx.expression())
         val_type = self.variable_manager.type_check(var_value)
 
+        # ── 5. Cast-target / declared-type consistency ───────────────────────
+        # When the initialiser is a direct cast(expr, T) call, the target type
+        # T MUST equal the declared variable type.  An explicit cast expresses
+        # programmer intent; silently accepting a mismatch (e.g. widening an
+        # int cast into a float variable) masks likely mistakes.
         #
+        # Rule: ``<TYPE> name = cast(expr, <TYPE>)`` — the two TYPEs must match.
+        # Good:  int   x = cast(y, int)
+        # Bad:   int   x = cast(y, float)   ← cast says float, variable says int
+        # Bad:   float x = cast(y, int)     ← cast says int,   variable says float
+        cast_target = self._direct_cast_type(ctx.expression())
+        if cast_target is not None and cast_target != decl_type:
+            msg = (
+                f"cast-type mismatch: cast produces '{cast_target.name}' "
+                f"but variable '{name}' is declared as '{type_text}' — "
+                f"change either the cast target or the variable type"
+            )
+            self.validator.push_error(ident_tok, msg)
+            self._record(
+                phase="declaration",
+                title=f"Cast-type mismatch: {name}",
+                description=msg,
+                line=line,
+                changed=name,
+                detail=f"error: cast target '{cast_target.name}' != declared '{type_text}'",
+            )
+
+        # ── 6. Sentinel / UNKNOWN type guard ─────────────────────────────────
         if val_type in TypeHandler.EMPTY or decl_type in TypeHandler.EMPTY:
             msg = (
                 f"cannot initialise '{type_text}' variable '{name}' "
@@ -144,6 +223,13 @@ class SemanticAnalyzer(BaseVisitor):
             )
             self.validator.push_error(ident_tok, msg)
             # raise DeclarationException(msg)
+
+        # ── 7. Implicit-narrowing warning ────────────────────────────────────
+        # Assigning a float expression to an int variable silently discards the
+        # fractional part.  C, Java, and Go all require an explicit cast here;
+        # we keep the coercion but surface a diagnostic so the programmer is
+        # aware of the precision loss.
+        self.validator.check_narrowing(decl_type, val_type, name, ident_tok)
 
         coerced_val = None
         try:
@@ -179,7 +265,6 @@ class SemanticAnalyzer(BaseVisitor):
             changed=name,
             detail=f"type={type_text}, value={variable.value!r}",
         )
-
 
 
     def visitConstDeclaration(self, ctx: EVALParser.ConstDeclarationContext) -> None:
@@ -476,7 +561,6 @@ class SemanticAnalyzer(BaseVisitor):
             # loop counter) persist and are mutated across iterations.
             self.visit(ctx.block())
 
-        print(self.variable_manager.current_scope_vars())
         self._loop_depth -= 1
 
     def visitTryStatement(self, ctx: EVALParser.TryStatementContext) -> None:
@@ -485,6 +569,23 @@ class SemanticAnalyzer(BaseVisitor):
         ident_tok   = ctx.IDENTIFIER().getSymbol()
         catch_name  = ident_tok.text
         col, line   = self.validator.tok_col_line(ident_tok)
+
+        # ── Reserved-name guard for the catch parameter ──────────────────────
+        # The catch clause binds a new identifier in the catch scope; it is
+        # subject to the same reserved-name restriction as any variable.
+        if self.validator.check_reserved_name(catch_name, ident_tok):
+            self._record(
+                phase="control_flow",
+                title=f"Reserved catch parameter: {catch_name}",
+                description=(
+                    f"'{catch_name}' is a reserved identifier and cannot be "
+                    f"used as a catch parameter name."
+                ),
+                line=line,
+                changed=catch_name,
+                detail="error: reserved identifier",
+            )
+            # We still analyse both blocks so subsequent errors are reported.
 
         self._record(
             phase="control_flow",
@@ -562,6 +663,7 @@ class SemanticAnalyzer(BaseVisitor):
     def visitEqualityExpr(self, ctx: EVALParser.EqualityExprContext) -> EvalType:
         lt = self.variable_manager.type_check(self.visit(ctx.expression(0)))
         rt = self.variable_manager.type_check(self.visit(ctx.expression(1)))
+        op = ctx.op.text
         if (
             lt not in TypeHandler.EMPTY
             and rt not in TypeHandler.EMPTY
@@ -571,6 +673,11 @@ class SemanticAnalyzer(BaseVisitor):
                 ctx.start,
                 f"comparing incompatible types {lt.name} and {rt.name}",
             )
+        # Warn on direct float equality / inequality.  IEEE 754 arithmetic
+        # means computed floats rarely compare exactly equal; e.g.
+        # ``0.1 + 0.2 == 0.3`` evaluates to False in IEEE 754.
+        # Java, C, and most linters flag this pattern.
+        self.validator.check_float_equality(op, lt, rt, ctx.start)
         return EvalType.BOOL
 
     def visitRelationalExpr(self, ctx: EVALParser.RelationalExprContext) -> bool | EvalType:
@@ -634,6 +741,13 @@ class SemanticAnalyzer(BaseVisitor):
         result_type = self.validator.numeric_result(op, lt, rt, ctx.start)
         if result_type == EvalType.UNKNOWN:
             return EvalType.UNKNOWN
+
+        # Warn when '%' is applied to floating-point operands.  Java and Go
+        # forbid this outright; Python allows it but the result is often
+        # surprising (e.g. 5.5 % 2.0 == 1.5, sign follows dividend, not
+        # divisor).  Surface a diagnostic so the programmer can cast first.
+        if op == "%" and result_type != EvalType.UNKNOWN:
+            self.validator.check_modulo_float(lt, rt, ctx.start)
 
         expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
         if expr_string is not None:

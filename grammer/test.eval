@@ -8,9 +8,11 @@ print("Sum:", sum)
 
 
 int age = 20
-while (t > 5){
+
+int count = 10
+while (count > 5){
     age +=1
-    break
+    count -= 1
 }
 
 const int newVal = cast(y, int)
@@ -41,4 +43,4 @@ try {
   print("Error: Division by zero!", a)
 }
 
-int c = 20 + 40 * 40  // Correctly evaluates to 1620t
+float c = 20 + 40 * 40  // Correctly evaluates to 1620t
