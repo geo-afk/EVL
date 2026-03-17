@@ -15,7 +15,6 @@ statement
     : variableDeclaration           // int x = 10
     | constDeclaration              // const int x = 10
     | assignment                    // x = 20  |  x += 5
-    | incrementDecrement            // x++  |  x--
     | ifStatement                   // if (cond) { ... } else { ... }
     | whileStatement                // while (cond) { ... }
     | tryStatement                  // try { ... } catch(e) { ... }
@@ -55,14 +54,6 @@ assignOp
     | DIV_ASSIGN
     ;
 
-// ─── Increment / Decrement (postfix only) ─────────────────────────────────────
-// e.g.  x++   x--
-// Placing these as statements (not inside expression) avoids the classic
-// ambiguity between prefix/postfix uses and keeps the expression rule clean.
-
-incrementDecrement
-    : IDENTIFIER (INCREMENT | DECREMENT)
-    ;
 
 breakStatement
     : BREAK
