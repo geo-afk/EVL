@@ -1,75 +1,63 @@
-from app.models.Scope import Scope
+from __future__ import annotations
+
 from typing import Any
 
-from app.models.Types import TypeHandler
+from app.models.Scope import Scope
+from app.models.Types import EvalType, TypeHandler
 from app.models.Variable import Variable
-from app.models.custom_exceptions import EVALTypeException, EVALNameException, EVALConstException
+from app.models.custom_exceptions import EVALNameException
 
 
 class VariableManager:
+    """
+    Manages the lexical scope stack and all variable state.
+
+    Responsibilities
+    ────────────────
+    • Push / pop scopes on block entry and exit.
+    • Define and look up variables across the scope chain.
+    • Provide shared static utilities used by the analyzer and handlers:
+        - ``type_check``     — extract an EvalType from any visitor result.
+        - ``unwrap_value``   — extract a raw Python value from any visitor result.
+        - ``scope_snapshot`` — serialisable view of all visible variables.
+    """
 
     def __init__(self, validator) -> None:
-        self._global_scope = Scope(name="global")
+        self._global_scope  = Scope(name="global")
         self._current_scope = self._global_scope
-        self._scope_depth = 0
-
-        self.validator = validator
-
+        self._scope_depth   = 0
+        self.validator      = validator
 
     # ── Scope management ─────────────────────────────────────────────────────
 
     def enter_scope(self, name: str) -> None:
-        """Enter a new block scope (called on every LBRACE)."""
+        """Push a new child scope onto the stack."""
         self._current_scope = Scope.push_scope(
             scope=self._current_scope,
-            name=name
+            name=name,
         )
-        self._scope_depth +=1
+        self._scope_depth += 1
+
+    def get_scope_name(self):
+        return self._current_scope.name
 
     def exit_scope(self) -> None:
+        """Pop the current scope and return to its parent."""
         self._current_scope = Scope.pop_scope(
             current_scope=self._current_scope,
-            validator=self.validator
+            validator=self.validator,
         )
-        self._scope_depth -=1
-
-
+        self._scope_depth -= 1
 
     @property
     def depth(self) -> int:
         """Current nesting depth (0 = global)."""
         return self._scope_depth
 
+    # ── Internal helpers ─────────────────────────────────────────────────────
 
-
-    @staticmethod
-    def _coerce(eval_type: str, value: Any) -> Any:
-        """
-        Validate and coerce a Python value to the declared EVAL type.
-        Raises EVALTypeError on mismatch.
-        """
-        if TypeHandler.is_valid_type(eval_type):
-            raise EVALTypeException(f"Unknown type '{eval_type}'.")
-
-
-        target = TypeHandler.is_python_type(eval_type)
-        if not isinstance(value, target):
-            # Allow silent int → float widening (e.g. int x = 3.0 is still an error,
-            # but float x = 3 is fine since int is a subtype of float in practice)
-            if eval_type == "float" and isinstance(value, int):
-                return float(value)
-            raise EVALTypeException(
-                f"Type mismatch: expected '{eval_type}' "
-                f"but got '{type(value).__name__}' for value {value!r}."
-            )
-        return value
-
-    def _find_scope(self, name: str) -> Scope| None:
-        """
-        Walk the scope stack from innermost outward.
-        Returns the scope dict that contains the variable, or None.
-        """
-
+    def _find_scope(self, name: str) -> Scope | None:
+        """Walk the scope stack from innermost outward; return the owning scope or None."""
         scope = self._current_scope
         while scope is not None:
             if scope.variables.get(name) is not None:
@@ -77,102 +65,126 @@ class VariableManager:
             scope = scope.parent
         return None
 
-
     # ── Declaration ──────────────────────────────────────────────────────────
 
-    def define(self, variable: Variable ) -> Variable:
+    def define(self, variable: Variable) -> Variable:
         """
-        Define a new variable in the CURRENT scope.
+        Define (or overwrite) a variable in the CURRENT scope.
 
-        Corresponds to grammar rules:
-            variableDeclaration : type IDENTIFIER ASSIGN expression
-            constDeclaration    : CONST variableDeclaration
+        Used for:
+          • initial variable / const declarations
+          • updating a variable's value or type after assignment / cast
         """
-        # coerced = self._coerce(eval_type, value)
         self._current_scope.variables[variable.name] = variable
-        return self._current_scope.variables.get(variable.name)
+        return variable
 
+    def is_defined_in_current_scope(self, name: str) -> bool:
+        """
+        True only if *name* is declared in the innermost scope.
+        Allows shadowing in nested scopes while catching re-declarations in the
+        same scope.
+        """
+        return name in self._current_scope.variables
+
+    # ── Lookup ───────────────────────────────────────────────────────────────
 
     def get_variable(self, name: str) -> Variable:
-        """Return the full Variable record (type, value, constant flag)."""
+        """Return the full Variable record; raises EVALNameException when absent."""
         scope = self._find_scope(name)
         if scope is None:
             raise EVALNameException(f"Variable '{name}' is not defined")
-        return scope.variables.get(name)
-
-
-    def assign(self, name: str, value: Any) -> Any:
-        """
-        Reassign an existing variable (plain '=' operator).
-
-        Corresponds to grammar rule:
-            assignment : IDENTIFIER ASSIGN expression
-        """
-        scope = self._find_scope(name)
-        if scope is None:
-            raise EVALNameException(f"Variable '{name}' is not defined.")
-
-        var = scope.variables.get(name)
-        if var.constant:
-            raise EVALConstException(f"Cannot reassign const variable '{name}'.")
-
-        var.value = self._coerce(var.type, value)
-        return var.value
-
-    def assign_op(self, name: str, op: str, value: Any) -> Any:
-        """
-        Compound assignment: +=  -=  *=  /=
-
-        Corresponds to grammar rule:
-            assignOp : PLUS_ASSIGN | MINUS_ASSIGN | MULTI_ASSIGN | DIV_ASSIGN
-        """
-        current = self.get_variable(name)
-        var_val = current.value
-
-        match op:
-            case "+=": result = var_val + value
-            case "-=": result = var_val - value
-            case "*=": result = var_val * value
-            case "/=":
-                if value == 0:
-                    raise ZeroDivisionError(f"Division by zero in '{name} /= 0'.")
-                result = var_val / value
-            case _:
-                raise EVALTypeException(f"Unknown compound operator '{op}'.")
-
-        return self.assign(name, result)
-
-
-    # ── Introspection / debug ─────────────────────────────────────────────────
+        return scope.variables[name]
 
     def exists(self, name: str) -> bool:
-        """Return True if the variable is visible in the current scope chain."""
+        """True if *name* is visible anywhere in the current scope chain."""
         return self._find_scope(name) is not None
 
+    # ── Introspection / snapshots ─────────────────────────────────────────────
+
     def current_scope_vars(self) -> dict[str, Variable]:
-        """Return a snapshot of variables declared in the current scope only."""
+        """Snapshot of variables declared in the innermost scope only."""
         return dict(self._current_scope.variables)
 
     def all_visible_vars(self) -> dict[str, Variable]:
         """
-        Return all variables visible from the current scope.
-        Inner scope variables shadow outer ones (same name resolution as get()).
+        All variables visible from the current scope, with inner-scope names
+        shadowing outer ones.
         """
         visible: dict[str, Variable] = {}
-
-        for key, value in self._current_scope.variables.items():
-            visible[key] = value
-
+        scope = self._current_scope
+        while scope is not None:
+            for name, var in scope.variables.items():
+                if name not in visible:
+                    visible[name] = var
+            scope = scope.parent
         return visible
+
+    def scope_snapshot(self) -> dict[str, dict]:
+        """
+        JSON-serialisable snapshot of every variable visible from the current
+        scope.  Captured at each step so the frontend can replay state changes.
+        """
+        return {
+            name: {
+                "type":  str(var.type),
+                "value": var.value,
+                "const": var.constant,
+            }
+            for name, var in self.all_visible_vars().items()
+        }
+
+    # ── Static utilities ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def unwrap_value(val: Any) -> Any:
+
+        # Walk Variable chains
+        while isinstance(val, Variable):
+            val = val.value
+
+        # Raw primitives — returned directly
+        if isinstance(val, bool):  # bool is subclass of int — must check first
+            return val
+        if isinstance(val, (int, float, str)):
+            return val
+
+        # Type sentinel — concrete value unknown at analysis time
+        if isinstance(val, EvalType):
+            return None
+
+        return None
+
+    @staticmethod
+    def type_check(val: Any) -> EvalType:
+        """
+        Extract an EvalType from any visitor result.
+
+        Handles Variable objects, EvalType sentinels, and raw Python values.
+        """
+        if isinstance(val, Variable):
+            t = val.type
+            return t if isinstance(t, EvalType) else TypeHandler.get_eval_type(str(t))
+        if isinstance(val, EvalType):
+            return val
+        if isinstance(val, bool):   # bool is a subclass of int — must check first
+            return EvalType.BOOL
+        if isinstance(val, int):
+            return EvalType.INT
+        if isinstance(val, float):
+            return EvalType.FLOAT
+        if isinstance(val, str):
+            return EvalType.STRING
+        if val is None:
+            return EvalType.NULL
+        return EvalType.UNKNOWN
 
     def __repr__(self) -> str:
         lines = [f"VariableManager (depth={self.depth})"]
-        for i, variables in enumerate(self._current_scope.variables.items()):
-            label = "global" if i == 0 else f"scope[{i}]"
-            lines.append(f"  {label}:")
-            if not variables:
-                lines.append("    <empty>")
-            for name, var in variables:
-                const_tag = " [const]" if var.constant else ""
-                lines.append(f"    {var.type} {name} = {var.value!r}{const_tag}")
+        visible = self.all_visible_vars()
+        if not visible:
+            lines.append("  <empty>")
+        for name, var in visible.items():
+            const_tag = " [const]" if var.constant else ""
+            lines.append(f"  {var.type} {name} = {var.value!r}{const_tag}")
         return "\n".join(lines)
+
