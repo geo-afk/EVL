@@ -4,6 +4,7 @@ from datetime import datetime
 from math import pi, sqrt
 from typing import Any, List
 from app.eval.evaluator import Evaluator
+from app.eval.expression_builder import ExpressionStringBuilder
 from app.eval.handler.comparison_handler import ComparisonHandler
 from app.eval.semantic_validation import SemanticValidation
 from app.eval.steps_recorder import StepRecorder
@@ -205,6 +206,7 @@ class SemanticAnalyzer(BaseVisitor):
                 f"{e} in this scope",
             )
 
+
     # ── Assignment ────────────────────────────────────────────────────────────
 
     def visitAssignment(self, ctx: EVALParser.AssignmentContext) -> None:
@@ -293,7 +295,6 @@ class SemanticAnalyzer(BaseVisitor):
             detail=f"op={op}, rhs={rhs_val!r}",
         )
 
-    # ── Print ─────────────────────────────────────────────────────────────────
 
     def visitPrintStatement(self, ctx: EVALParser.PrintStatementContext) -> str:
         """
@@ -376,6 +377,11 @@ class SemanticAnalyzer(BaseVisitor):
         cond_type   = self.variable_manager.type_check(cond_result)
         cond_value  = VariableManager.unwrap_value(cond_result)
 
+        print("WHILE statement:")
+        print("Result", cond_result)
+        print("Type", cond_type)
+        print("Value", cond_value)
+
         if cond_type not in (EvalType.BOOL, EvalType.UNKNOWN, None):
             self.validator.push_error(
                 expr.start,
@@ -405,7 +411,11 @@ class SemanticAnalyzer(BaseVisitor):
         )
 
         self._loop_depth += 1
+        print("Beginning loop")
         self.visit(ctx.block())
+
+        print(self.variable_manager.current_scope_vars())
+        print("End loop")
         self._loop_depth -= 1
 
     def visitTryStatement(self, ctx: EVALParser.TryStatementContext) -> None:
@@ -525,29 +535,37 @@ class SemanticAnalyzer(BaseVisitor):
 
         return Evaluator.evaluate_relational(left_val, op, right_val)
 
+
+
     def visitAdditiveExpr(self, ctx: EVALParser.AdditiveExprContext) -> Any:
         lhs = self.visit(ctx.expression(0))
         rhs = self.visit(ctx.expression(1))
-        op  = ctx.op.text
+        op = ctx.op.text
 
         lt = self.variable_manager.type_check(lhs)
         rt = self.variable_manager.type_check(rhs)
 
+        # Type-check first — bail early on non-numeric operands
         result_type = self.validator.numeric_result(op, lt, rt, ctx.start)
         if result_type == EvalType.UNKNOWN:
             return EvalType.UNKNOWN
 
-        lv = VariableManager.unwrap_value(lhs)
-        rv = VariableManager.unwrap_value(rhs)
-        if isinstance(lv, (int, float)) and isinstance(rv, (int, float)):
-            return Postfix.get_result(f"{lv} {op} {rv}")
+        # Build the full expression string from the parse tree so Postfix
+        # evaluates the whole compound expression in one pass (e.g.
+        # "10 / 5 + 23 - 6") rather than operating on a single pairwise
+        # value which could be a negative intermediate (e.g. -2).
+        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
+        if expr_string is not None:
+            return Postfix.get_result(expr_string)
 
         return result_type
+
+
 
     def visitMultiplicativeExpr(self, ctx: EVALParser.MultiplicativeExprContext) -> Any:
         lhs = self.visit(ctx.expression(0))
         rhs = self.visit(ctx.expression(1))
-        op  = ctx.op.text
+        op = ctx.op.text
 
         lt = self.variable_manager.type_check(lhs)
         rt = self.variable_manager.type_check(rhs)
@@ -556,11 +574,10 @@ class SemanticAnalyzer(BaseVisitor):
         if result_type == EvalType.UNKNOWN:
             return EvalType.UNKNOWN
 
-        lv = VariableManager.unwrap_value(lhs)
-        rv = VariableManager.unwrap_value(rhs)
-        if isinstance(lv, (int, float)) and isinstance(rv, (int, float)):
+        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
+        if expr_string is not None:
             try:
-                return Postfix.get_result(f"{lv} {op} {rv}")
+                return Postfix.get_result(expr_string)
             except ZeroDivisionError:
                 self.validator.push_error(
                     ctx.start,
@@ -572,7 +589,7 @@ class SemanticAnalyzer(BaseVisitor):
 
     def visitUnaryMinusExpr(self, ctx: EVALParser.UnaryMinusExprContext) -> Any:
         inner = self.visit(ctx.expression())
-        t     = self.variable_manager.type_check(inner)
+        t = self.variable_manager.type_check(inner)
 
         if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
             self.validator.push_error(
@@ -581,11 +598,14 @@ class SemanticAnalyzer(BaseVisitor):
             )
             return EvalType.UNKNOWN
 
-        v = VariableManager.unwrap_value(inner)
-        if isinstance(v, (int, float)):
-            return Postfix.get_result(f"0 - {v}")
+        # _build_numeric_expr_string represents unary minus as (0 - x)
+        # so Postfix never sees a bare negative literal as its first token
+        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
+        if expr_string is not None:
+            return Postfix.get_result(expr_string)
 
         return t if t in TypeHandler.NUMERIC else EvalType.UNKNOWN
+
 
     def visitUnaryNotExpr(self, ctx: EVALParser.UnaryNotExprContext) -> EvalType:
         inner = self.visit(ctx.expression())
