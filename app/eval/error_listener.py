@@ -1,9 +1,11 @@
 from antlr4.error.ErrorListener import ErrorListener
-from app.models.CustomError import ErrorResponse, MarkerSeverity
+from app.models.CustomError import ErrorResponse
+
 
 class EVALErrorListener(ErrorListener):
     """
-    Custom error listener that collects errors instead of printing them.
+    Custom error listener that collects syntax / lexical errors instead of
+    printing them, so callers can handle them programmatically.
     """
 
     def __init__(self):
@@ -11,58 +13,50 @@ class EVALErrorListener(ErrorListener):
         self.errors: list[ErrorResponse] = []
 
     def syntaxError(self, recognizer, offender_symbol, line, column, msg, e):
-        """Called when a syntax error occurs."""
-        error = ErrorResponse(
-            column_number = column,
-            line_number = line,
-            message = msg
+        """Called by ANTLR when a syntax error is detected."""
+        self.errors.append(
+            ErrorResponse(
+                message=msg,
+                line_number=line,
+                column_number=column,
+            )
         )
-        self.errors.append(error)
 
     def reportAmbiguity(self, recognizer, dfa, start_index, stop_index,
                         exact, ambiguity_alts, configs):
-        """Called when parser detects ambiguity."""
+        """Called when the parser detects ambiguity."""
         token_stream = recognizer.getInputStream()
-        token = token_stream.tokens[start_index]
-
-
+        token  = token_stream.tokens[start_index]
         column = token.column
-        msg = f"Ambiguity detected at indices {start_index}-{stop_index}"
+        msg    = f"Ambiguity detected at token indices {start_index}–{stop_index}"
 
-        error = ErrorResponse(
-            column_number=column,
-            line_number=stop_index,
-            message=f"ambiguity: {msg}"
+        self.errors.append(
+            ErrorResponse(
+                message=f"ambiguity: {msg}",
+                line_number=token.line,
+                column_number=column,
+            )
         )
-
-        self.errors.append(error)
-        print(f"⚠️  {msg}")
 
     def reportAttemptingFullContext(self, recognizer, dfa, start_index,
                                     stop_index, conflicting_alts, configs):
-        """Called when parser attempts full context."""
-        pass  # Usually not critical
+        pass  # Not critical for this language
 
     def reportContextSensitivity(self, recognizer, dfa, start_index,
                                  stop_index, prediction, configs):
-        """Called when parser detects context sensitivity."""
-        pass  # Usually not critical
+        pass  # Not critical for this language
 
-    def has_errors(self):
-        """Check if any errors were collected."""
+    def has_errors(self) -> bool:
         return len(self.errors) > 0
 
-    def get_error_report(self):
-        """Get formatted error report."""
+    def get_error_report(self) -> str:
+        """Return a human-readable summary of all collected errors."""
         if not self.errors:
             return "No errors found"
 
-        report = f"Found {len(self.errors)} error(s):\n"
+        lines = [f"Found {len(self.errors)} error(s):"]
         for i, error in enumerate(self.errors, 1):
-            if 'line' in error:
-                report += f"  {i}. Line {error.line_number}:{error.column_number} - "
-                report += f"{error.message}\n"
-            else:
-                report += f"  {i}. {error.message}\n"
-        return report
-
+            lines.append(
+                f"  {i}. Line {error.line_number}:{error.column_number} — {error.message}"
+            )
+        return "\n".join(lines)
