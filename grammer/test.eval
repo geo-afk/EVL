@@ -1,9 +1,17 @@
 int x = 10
 float y = 20.5
 int t = 10/ 5 + 23 - 6
+float jj = 33
 int sum = x + y  // Implicit conversion (weak typing)
 
 print("Sum:", sum)
+
+
+int age = 20
+while (t > 5){
+    age +=1
+    break
+}
 
 const int newVal = cast(y, int)
 
@@ -14,9 +22,9 @@ int hourInDay =  HOURS_IN_DAY
 int year = YEAR
 
 int by = 0
-// int number = 10
+int number = 10
 
-float g = pow(by, number)
+float g = pow(number, by)
 
 float val = sqrt(g)
 float minimum = min(cast(y, int), cast(x, int))
