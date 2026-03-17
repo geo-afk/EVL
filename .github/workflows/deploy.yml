@@ -22,10 +22,12 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts
 
-      # ── 3. Copy backend to EC2 ────────────────────────────────────────────
+      # ── 3. Copy backend to EC2 (excluding .git) ───────────────────────────
       - name: Copy backend to EC2
         run: |
-          scp -i ~/.ssh/deploy_key -r ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/ubuntu/app/backend/
+          rsync -az --exclude='.git' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/ubuntu/app/backend/
 
       # ── 4. Write .env, install deps, restart service ──────────────────────
       - name: Configure and restart backend
@@ -38,7 +40,7 @@ jobs:
           AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
           ENVFILE
 
-            pip3 install --quiet fastapi uvicorn openai python-dotenv
+            /home/ubuntu/app/venv/bin/pip install --quiet -r /home/ubuntu/app/backend/requirements.txt
 
             sudo systemctl restart evalbackend
           EOF
