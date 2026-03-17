@@ -372,15 +372,14 @@ class SemanticAnalyzer(BaseVisitor):
             self.visit(blocks[-1])
 
     def visitWhileStatement(self, ctx: EVALParser.WhileStatementContext) -> None:
-        expr        = ctx.expression()
+        _MAX_ITERATIONS = 1_000   # safety cap — prevents runaway infinite loops
+
+        expr = ctx.expression()
+
+        # ── 1. Initial condition check (type validation + early-exit warnings) ──
         cond_result = self.visit(expr)
         cond_type   = self.variable_manager.type_check(cond_result)
         cond_value  = VariableManager.unwrap_value(cond_result)
-
-        print("WHILE statement:")
-        print("Result", cond_result)
-        print("Type", cond_type)
-        print("Value", cond_value)
 
         if cond_type not in (EvalType.BOOL, EvalType.UNKNOWN, None):
             self.validator.push_error(
@@ -388,34 +387,96 @@ class SemanticAnalyzer(BaseVisitor):
                 f"while condition must be bool, got {cond_type.name}",
             )
 
+        # Condition is statically False — body is dead code, skip entirely.
         if cond_value is False:
             self.validator.push_warnings(
                 expr.start,
                 "while condition is always false — loop body is unreachable",
             )
-        elif cond_value is True:
-            self.validator.push_warnings(
-                expr.start,
-                "while condition is always true — potential infinite loop",
+            self._record(
+                phase="control_flow",
+                title="While loop (skipped)",
+                description=(
+                    f"while condition '{expr.getText()}' evaluated to False — "
+                    f"loop body will never execute."
+                ),
+                line=ctx.start.line,
+                detail=f"type={cond_type}, value=False",
             )
+            return
 
         self._record(
             phase="control_flow",
-            title="While loop",
+            title="While loop entered",
             description=(
                 f"while condition '{expr.getText()}' "
-                f"evaluated to {cond_value!r}."
+                f"evaluated to {cond_value!r} — beginning loop."
             ),
             line=ctx.start.line,
             detail=f"type={cond_type}, value={cond_value!r}",
         )
 
+        # ── 2. Execute the loop body repeatedly until the condition is False ──
         self._loop_depth += 1
-        print("Beginning loop")
-        self.visit(ctx.block())
+        iteration = 0
+
+        while True:
+            # Re-evaluate the condition using the current variable state.
+            # visitAssignment keeps variable_manager up to date after every
+            # assignment inside the block, so this naturally picks up changes
+            # made in the previous iteration.
+            cond_result = self.visit(expr)
+            cond_value  = VariableManager.unwrap_value(cond_result)
+
+            # Condition is now False — exit the loop normally.
+            if not cond_value:
+                self._record(
+                    phase="control_flow",
+                    title=f"While condition false — loop exited",
+                    description=(
+                        f"After {iteration} iteration(s), condition "
+                        f"'{expr.getText()}' is now False — loop ends."
+                    ),
+                    line=ctx.start.line,
+                )
+                break
+
+            # Safety guard: halt before we spin forever.
+            if iteration >= _MAX_ITERATIONS:
+                self.validator.push_warnings(
+                    expr.start,
+                    f"while loop halted after {_MAX_ITERATIONS} iterations "
+                    f"— possible infinite loop",
+                )
+                self._record(
+                    phase="control_flow",
+                    title="While loop halted (max iterations)",
+                    description=(
+                        f"Loop exceeded the {_MAX_ITERATIONS}-iteration safety "
+                        f"cap and was stopped."
+                    ),
+                    line=ctx.start.line,
+                )
+                break
+
+            iteration += 1
+            self._record(
+                phase="control_flow",
+                title=f"While iteration {iteration}",
+                description=(
+                    f"Condition '{expr.getText()}' = {cond_value!r} — "
+                    f"executing loop body (iteration {iteration})."
+                ),
+                line=ctx.block().start.line,
+            )
+
+            # Visit the block. visitBlock pushes/pops its own scope, so
+            # variables declared inside the loop are correctly re-created and
+            # discarded each iteration, while outer-scope variables (e.g. the
+            # loop counter) persist and are mutated across iterations.
+            self.visit(ctx.block())
 
         print(self.variable_manager.current_scope_vars())
-        print("End loop")
         self._loop_depth -= 1
 
     def visitTryStatement(self, ctx: EVALParser.TryStatementContext) -> None:
