@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from app.ai import router as ai_router
 
+#from app.eval.eval import EVALAnalyzer
+
 load_dotenv()
 
 logger = structlog.get_logger("api")
@@ -13,16 +15,16 @@ logger = structlog.get_logger("api")
 app = FastAPI()
 
 # CORS — REQUIRED FOR BROWSER REQUESTS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         "http://localhost:5173",
+#         "http://127.0.0.1:5173",
+#     ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 # Register AI routes
 app.include_router(ai_router, prefix="/api/ai")

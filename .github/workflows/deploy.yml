@@ -1,0 +1,44 @@
+name: Deploy Backend to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout code ──────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up SSH ─────────────────────────────────────────────────────
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts
+
+      # ── 3. Copy backend to EC2 ────────────────────────────────────────────
+      - name: Copy backend to EC2
+        run: |
+          scp -i ~/.ssh/deploy_key -r ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/ubuntu/app/backend/
+
+      # ── 4. Write .env, install deps, restart service ──────────────────────
+      - name: Configure and restart backend
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} bash -s << EOF
+            cat > /home/ubuntu/app/backend/.env << ENVFILE
+          AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_API_VERSION=${{ secrets.AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          ENVFILE
+
+            pip3 install --quiet fastapi uvicorn openai python-dotenv
+
+            sudo systemctl restart evalbackend
+          EOF

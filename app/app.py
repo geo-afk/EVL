@@ -3,7 +3,6 @@ from fastapi import FastAPI
 from starlette import status
 from starlette.requests import Request
 
-
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.cors import CORSMiddleware
@@ -12,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.api.routes.eval_router import eval_router
 from app.api.routes.llm_router import llm_router
+from app.ai import router as ai_router
 from app.utils.config import Config
 from app.utils.log_config import setup_logging
 
@@ -47,17 +47,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-
-
-
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 
 # app.add_middleware(CSRFMiddleware)
 # app.add_middleware(LoggingMiddleware)
 # app.add_middleware(RateLimitMiddleware)
 # app.add_middleware(ErrorHandlingMiddleware)
-
 
 
 @app.exception_handler(RequestValidationError)
@@ -110,3 +105,4 @@ app.add_middleware(
 
 app.include_router(eval_router)
 app.include_router(llm_router)
+app.include_router(ai_router, prefix="/api/ai")
