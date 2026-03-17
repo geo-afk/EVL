@@ -103,6 +103,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(eval_router)
-app.include_router(llm_router)
+app.include_router(eval_router, prefix="/api/eval")
+#app.include_router(llm_router)
 app.include_router(ai_router, prefix="/api/ai")
+
