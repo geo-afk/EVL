@@ -1,17 +1,3 @@
-"""
-Scope.py
-────────
-Represents one frame on the lexical scope stack.
-
-Fixes over the original
-───────────────────────
-• Removed the unused ``from symtable import Symbol`` import that shadowed the
-  built-in and served no purpose.
-• ``snapshot()`` now serialises ``sym.type`` correctly.  EvalType is a
-  str-Enum so its value is already a plain string, but an explicit ``.value``
-  guard is added to be safe against any future type-annotation drift.
-"""
-
 from __future__ import annotations
 
 import json
