@@ -9,18 +9,6 @@ from app.models.custom_exceptions import EVALNameException
 
 
 class VariableManager:
-    """
-    Manages the lexical scope stack and all variable state.
-
-    Responsibilities
-    ────────────────
-    • Push / pop scopes on block entry and exit.
-    • Define and look up variables across the scope chain.
-    • Provide shared static utilities used by the analyzer and handlers:
-        - ``type_check``     — extract an EvalType from any visitor result.
-        - ``unwrap_value``   — extract a raw Python value from any visitor result.
-        - ``scope_snapshot`` — serialisable view of all visible variables.
-    """
 
     def __init__(self, validator) -> None:
         self._global_scope  = Scope(name="global")
