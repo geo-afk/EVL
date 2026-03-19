@@ -10,6 +10,8 @@ _RELATIONAL_OPS: dict[str, Any] = {
     ">":  _op.gt,
     "<=": _op.le,
     ">=": _op.ge,
+    "==": _op.eq,
+    "!=": _op.ne,
 }
 
 
@@ -22,22 +24,6 @@ def _strip_quotes(s: str) -> str:
 
 
 class Evaluator:
-
-    @staticmethod
-    def evaluate(target_text: Any) -> int | float | str | None:
-        """
-        Return *target_text* unchanged if it is already int, float, or str;
-        otherwise return None.
-        """
-        if isinstance(target_text, bool):   # bool is a subclass of int — keep first
-            return None
-        if isinstance(target_text, int):
-            return target_text
-        if isinstance(target_text, float):
-            return target_text
-        if isinstance(target_text, str):
-            return target_text
-        return None
 
     @staticmethod
     def cast(
@@ -128,3 +114,47 @@ class Evaluator:
             f"Cannot initialise '{type_text}' variable '{name}' "
             f"with value of type '{val_type.name}'"
         )
+
+    @staticmethod
+    def apply_compound_op(
+            op: str,
+            cur_val: int | float,
+            rhs_val: int | float,
+    ) -> tuple[Any, str | None]:
+
+        if op == "+=":
+            return cur_val + rhs_val, None
+        elif op == "-=":
+            return cur_val - rhs_val, None
+        elif op == "*=":
+            return cur_val * rhs_val, None
+        elif op == "/=":
+            if rhs_val == 0:
+                return None, "division by zero"
+            return cur_val / rhs_val, None
+        return None, f"unknown compound operator '{op}'"
+
+    @staticmethod
+    def coerce_for_assignment(
+            val: Any,
+            decl_type: EvalType,
+            val_type: EvalType,
+            name: str,
+    ) -> tuple[Any, str | None]:
+        """
+        Coerces *val* to *decl_type* for an assignment statement.
+
+        Returns (coerced_value, None) on success,
+        or      (original_val, error_message) on failure.
+        """
+        try:
+            result = Evaluator.coerce_to_declared_type(
+                val=val,
+                decl_type=decl_type,
+                val_type=val_type,
+                name=name,
+                type_text=decl_type.value,
+            )
+            return result, None
+        except CoercionException as e:
+            return val, str(e)
