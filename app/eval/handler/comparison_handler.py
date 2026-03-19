@@ -69,18 +69,7 @@ class ComparisonHandler(BaseExpressionHandler):
         expr: EVALParser.ExpressionContext,
         side: str,
     ) -> int | float:
-        """
-        Evaluate one operand expression and return its numeric value.
 
-        Steps
-        ─────
-        1. visitor.visit(expr)  — runs the full visitor dispatch chain.
-        2. _unwrap(result)      — strips Variable wrappers / EvalType sentinels.
-        3. Validate             — confirm the result is int or float.
-
-        Returns int | float on success.
-        Raises ValueError with a descriptive message on failure.
-        """
         raw      = self._eval(expr)          # step 1 — visitor evaluates
         value    = self._unwrap(raw)         # step 2 — strip Variable / EvalType
 
