@@ -2,25 +2,28 @@ class Postfix:
 
     @staticmethod
     def _is_number(token):
-        """Check if a token is a number (integer or float)."""
+        """
+        Check if a token is a non-negative integer or float.
+
+        Negative numbers are intentionally NOT handled here.
+        ExpressionStringBuilder encodes unary minus as '( 0 - x )' so a bare
+        negative literal never reaches this method.  If that invariant ever
+        changes, add a leading-minus check back here.
+        """
         if not token:
             return False
 
-        # Check each character
-        has_digit = False
+        has_digit   = False
         has_decimal = False
 
         for i, char in enumerate(token):
             if char.isdigit():
                 has_digit = True
             elif char == '.':
-                # Decimal point can't be at start or end, and only one allowed
+                # Decimal point cannot be at start or end; only one allowed.
                 if has_decimal or i == 0 or i == len(token) - 1:
                     return False
                 has_decimal = True
-            elif char == '-' and i == 0:
-                # Negative sign only allowed at start
-                continue
             else:
                 return False
 
