@@ -713,6 +713,7 @@ class SemanticAnalyzer(BaseVisitor):
             cond_type   = self.variable_manager.get_type(cond_result)
             cond_value  = VariableManager.unwrap_value(cond_result)
 
+
             if cond_type != EvalType.BOOL:
                 self.validator.push_error(
                     expr.start,
@@ -950,7 +951,6 @@ class SemanticAnalyzer(BaseVisitor):
             line=ctx.start.line,
         )
 
-        # ── Keyword check: WARNING only, never a hard error ───────────────────
         errors_before_kw = len(self.errors)
         is_reserved = self.validator.check_reserved_keyword(catch_name, ident_tok)
         if is_reserved:
@@ -974,10 +974,7 @@ class SemanticAnalyzer(BaseVisitor):
                 detail="warning: reserved identifier — downgraded from error",
             )
 
-        # ── Try block ─────────────────────────────────────────────────────────
-        # visitBlock handles its own scope push/pop.  We wrap in a Python
-        # try/except so runtime exceptions are intercepted here.
-        # BreakSignal / ContinueSignal are NOT errors — re-raise immediately.
+
         self._record(
             phase="control_flow",
             title="Entering try block",
@@ -1056,8 +1053,7 @@ class SemanticAnalyzer(BaseVisitor):
         # ── Catch block — its own fresh scope, separate from the try scope ────
         self.variable_manager.enter_scope("catch")
         try:
-            # catch_var is defined HERE — only when an error actually occurred,
-            # typed as STRING so the user can print / inspect the message.
+
             catch_var = Variable(
                 name=catch_name,
                 type=EvalType.STRING,
