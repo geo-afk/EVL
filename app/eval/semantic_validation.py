@@ -1,6 +1,10 @@
-from app.models.CustomError import ErrorResponse, WarningResponse
+from numbers import Number
+
+from app.models.SyntaxError import ErrorResponse, WarningResponse
 from app.models.Types import EvalType, TypeHandler
 from typing import List, Any
+
+from generated.EVALParser import EVALParser
 
 
 class SemanticValidation:
@@ -10,7 +14,7 @@ class SemanticValidation:
     # type name, or macro constant is forbidden as a variable / parameter name.
     # Keeping this here (rather than in the analyser) makes it easy to reuse
     # across any validation site and to extend as the language grows.
-    RESERVED_NAMES: frozenset[str] = frozenset({
+    RESERVED_KEYWORD: frozenset[str] = frozenset({
         # Primitive type keywords
         "int", "float", "string", "bool",
         # Modifier keyword
@@ -91,6 +95,11 @@ class SemanticValidation:
 
 
     @staticmethod
+    def is_numeric_val(val: Any) -> bool:
+        return isinstance(val, Number)
+
+
+    @staticmethod
     def tok_col_line(token) -> tuple[int, int]:
         column = token.column if token else 0
         line = token.line if token else 0
@@ -120,13 +129,13 @@ class SemanticValidation:
 
     # ── New validation helpers ────────────────────────────────────────────────
 
-    def check_reserved_name(self, name: str, token: Any) -> bool:
+    def check_reserved_keyword(self, name: str, token: Any) -> bool:
         """
         Emit an error and return True if *name* clashes with a reserved
         identifier (keyword, built-in function, type name, or macro constant).
         Returns False when the name is safe to use.
         """
-        if name in self.RESERVED_NAMES:
+        if name in self.RESERVED_KEYWORD:
             self.push_error(
                 token,
                 f"'{name}' is a reserved identifier and cannot be used as a "
@@ -190,3 +199,25 @@ class SemanticValidation:
                 "result follows Python remainder semantics and may be unexpected; "
                 "consider casting to int first",
             )
+
+    @staticmethod
+    def direct_cast_type(expr_ctx: Any) -> "EvalType | None":
+        """
+        If *expr_ctx* is a top-level ``cast(…, T)`` call, return the declared
+        target EvalType *T*.  Returns ``None`` for any other expression shape.
+
+        This is used by ``visitVariableDeclaration`` to enforce the rule that
+        the result of an explicit cast must match the variable's declared type
+        (e.g. ``int x = cast(y, float)`` is an error).
+
+        Only the *direct* top-level expression is inspected; a cast nested
+        inside another call (e.g. ``min(cast(…), …)``) is intentionally left
+        unchecked because the outer function may widen the result.
+        """
+        if not isinstance(expr_ctx, EVALParser.BuiltinExprContext):
+            return None
+        builtin_func = expr_ctx.builtinFunc()
+        cast_ctx = builtin_func.castCall()
+        if cast_ctx is None:
+            return None
+        return TypeHandler.get_eval_type(cast_ctx.type_().getText())
