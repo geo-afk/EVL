@@ -10,7 +10,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.api.routes.eval_router import eval_router
-# from app.api.routes.ai_router import router as ai_router
+from app.api.routes.ai_router import router as ai_router
 from app.utils.config import Config
 from app.utils.log_config import setup_logging
 
@@ -103,7 +103,7 @@ app.add_middleware(
 )
 
 app.include_router(eval_router, prefix="/api/eval")
-# app.include_router(ai_router, prefix="/api/ai")
+app.include_router(ai_router, prefix="/api/ai")
 
 
 @app.get("/")
