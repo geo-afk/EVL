@@ -6,6 +6,7 @@ const int MAX_COUNT = 10
 const float EPSILON = 0.001
 const string APP_NAME = "EvalLang Demo"
 const bool FEATURE_ENABLED = true
+int afg = abs(-45)
 
 int counter = 0
 float temperature = 23.5
@@ -86,11 +87,11 @@ float complexFunc =
 // Print statements (strings + expressions)
 // ─────────────────────────────────────────────────────────────
 
-print("Application:", APP_NAME)
-print("Counter:", counter)
-print("Temperature:", temperature, "Status:", status)
-print("Math:", sum + product * 2)
-print("Macros:", DAYS_IN_WEEK, HOURS_IN_DAY, YEAR, PI)
+print("Application: ", APP_NAME)
+print("Counter: ", counter)
+print("Temperature: ", temperature, "Status:", status)
+print("Math: ", sum + product * 2)
+print("Macros: ", DAYS_IN_WEEK, HOURS_IN_DAY, YEAR, PI)
 
 // ─────────────────────────────────────────────────────────────
 // If / Else If / Else
@@ -100,6 +101,7 @@ if (counter < 0) {
     print("Counter is negative")
 } else if (counter == 0) {
     print("Counter is zero")
+}
 if (counter < MAX_COUNT) {
     print("Counter is below max")
 } else {
@@ -111,7 +113,7 @@ if (counter < MAX_COUNT) {
 // ─────────────────────────────────────────────────────────────
 
 while (counter < 5) {
-    print("Loop iteration:", counter)
+    print("Loop iteration: ", counter)
     counter += 1
 }
 
@@ -123,9 +125,9 @@ while (counter < 5) {
     int scopedValue = 100
     {
         int innerValue = scopedValue + 50
-        print("Inner value:", innerValue)
+        print("Inner value: ", innerValue)
     }
-    print("Outer scoped value:", scopedValue)
+    print("Outer scoped value: ", scopedValue)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -133,13 +135,13 @@ while (counter < 5) {
 // ─────────────────────────────────────────────────────────────
 
 try {
-    int risky = 10 / 2
-    print("Risky result:", risky)
+    int risky = 10 / 0
+    print("Risky result: ", risky)
 
     int another = cast("123", int)
-    print("Casted:", another)
+    print("Casted: ", another)
 } catch (error) {
-    print("Caught error:", error)
+    print("Caught error: ", error)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -167,4 +169,5 @@ float finalResult =
     - pow(2, 3)
     / sqrt(16)
 
-print("Final result:", finalResult)
+print("Final result: ", finalResult)
+print("\"F\"")
