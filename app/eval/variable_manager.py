@@ -136,14 +136,10 @@ class VariableManager:
         if isinstance(val, (int, float, str)):
             return val
 
-        # Type sentinel — concrete value unknown at analysis time
-        if isinstance(val, EvalType):
-            return None
-
         return None
 
     @staticmethod
-    def type_check(val: Any) -> EvalType:
+    def get_type(val: Any) -> EvalType:
         """
         Extract an EvalType from any visitor result.
 
