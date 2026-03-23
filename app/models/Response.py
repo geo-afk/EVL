@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.models.Steps import Steps
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
-from app.models.CustomError import ErrorResponse, WarningResponse
+from app.models.SyntaxError import ErrorResponse, WarningResponse
 
 
 # ── Scope ─────────────────────────────────────────────────────────────────────
