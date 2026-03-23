@@ -1,33 +1,48 @@
+import logging
+import sys
 from antlr4 import InputStream
 from antlr4.CommonTokenStream import CommonTokenStream
 import structlog
 
 from app.analyzer.semantic_analyzer import SemanticAnalyzer
 from app.eval.error_listener import EVALErrorListener
-from app.models.CustomError import ErrorResponse
+from app.models.SyntaxError import ErrorResponse
 from app.models.Response import AnalysisResponse
 from generated.EVALLexer import EVALLexer
 from generated.EVALParser import EVALParser
 
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    stream=sys.stdout,
+    force=True
+)
+
+
 structlog.configure(
     processors=[
+        # Add callsite parameters (filename, line number, function name)
         structlog.processors.CallsiteParameterAdder(
             {
                 structlog.processors.CallsiteParameter.FILENAME,
                 structlog.processors.CallsiteParameter.LINENO,
                 structlog.processors.CallsiteParameter.FUNC_NAME,
+                structlog.processors.CallsiteParameter.MODULE,  # Optional: add module name
             }
         ),
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.dev.ConsoleRenderer(),
+        structlog.processors.StackInfoRenderer(),  # Adds stack information
+        structlog.processors.format_exc_info,      # Formats exception info
+        # Use different renderers based on environment
+        structlog.dev.ConsoleRenderer(),  # This will show colors and better formatting in development
     ],
     context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
+    logger_factory=structlog.stdlib.LoggerFactory(),  # Use stdlib LoggerFactory
     cache_logger_on_first_use=True,
 )
 
@@ -35,18 +50,6 @@ logger = structlog.get_logger(__name__)
 
 
 class EVALAnalyzer:
-    """
-    Orchestrates the three-phase analysis pipeline:
-      1. Lexical analysis   — tokenise the source code.
-      2. Syntax analysis    — build a parse tree.
-      3. Semantic analysis  — type-check, resolve names, record execution steps.
-
-    Returns an ``AnalysisResponse`` in all cases so the FastAPI route always
-    has a consistent, typed object to return to the frontend.
-
-    Unrecoverable internal failures (Python exceptions from the analyzer itself)
-    are re-raised so FastAPI can return an appropriate 500 response.
-    """
 
     def analyze(self, eval_code: str) -> AnalysisResponse:
         tokens, lex_errors = self._lexical_analysis(eval_code)
@@ -55,6 +58,7 @@ class EVALAnalyzer:
 
         parse_tree, parse_errors = self._syntax_analysis(tokens)
         if parse_errors:
+            print(parse_errors)
             return AnalysisResponse.from_errors_only(parse_errors)
 
         return self._semantic_analysis(parse_tree)
@@ -96,7 +100,8 @@ class EVALAnalyzer:
             tree = parser.program()
             return tree, error_listener.errors
         except Exception as e:
-            logger.error("syntax_analysis_failed", error=str(e))
+            # logger.error("syntax_analysis_failed", error=str(e))
+            logger.error("syntax_analysis_failed", error=str(e), exc_info=True)
             return None, [ErrorResponse(
                 message=f"Syntax analysis failed: {e}",
                 line_number=0,
@@ -115,7 +120,7 @@ class EVALAnalyzer:
             # An unexpected Python exception means the analyzer itself crashed —
             # re-raise so FastAPI returns a 500 rather than swallowing it.
             # logger.error("semantic_analysis_failed", error=str(e), exc_info=True)
-            logger.error("semantic_analysis_failed", error=str(e))
+            logger.error("semantic_analysis_failed", error=str(e), exc_info=True)
             # raise
 
         return AnalysisResponse.from_analysis(
