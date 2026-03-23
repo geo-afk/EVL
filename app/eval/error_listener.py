@@ -1,5 +1,5 @@
 from antlr4.error.ErrorListener import ErrorListener
-from app.models.CustomError import ErrorResponse
+from app.models.SyntaxError import ErrorResponse
 
 
 class EVALErrorListener(ErrorListener):
