@@ -23,3 +23,11 @@ class CoercionException(Exception):
 
 class PowException(Exception):
     pass
+
+
+
+class BreakSignal(Exception):
+    """Raised by visitBreakStatement to unwind to the nearest enclosing loop."""
+
+class ContinueSignal(Exception):
+    """Raised by visitContinueStatement to skip to the next loop iteration."""
