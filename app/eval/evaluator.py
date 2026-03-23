@@ -1,7 +1,5 @@
 import operator as _op
 from typing import Any
-
-from app.eval.variable_manager import VariableManager
 from app.models.Types import EvalType, TypeHandler
 from app.models.custom_exceptions import CoercionException
 
@@ -158,3 +156,50 @@ class Evaluator:
             return result, None
         except CoercionException as e:
             return val, str(e)
+
+    @staticmethod
+    def is_non_numeric(t: EvalType) -> bool:
+        """
+        True when *t* is a concrete, known type that is NOT numeric.
+        Returns False for EMPTY/UNKNOWN sentinels (those are handled
+        separately as 'not yet resolved', not as type errors).
+        Used to gate compound operators (+=, -=, *=, /=).
+        """
+        return t not in TypeHandler.NUMERIC
+
+
+    @staticmethod
+    def process_print_arg(value) -> str:
+        """
+        Convert a print argument to its display string.
+        - If the value is a string, strip surrounding quotes and resolve escape sequences.
+        - Otherwise, just stringify it (handles ints, floats, bools, None, etc.)
+        """
+        if value is None:
+            return ""
+
+        if not isinstance(value, str):
+            return str(value)
+
+        # Strip surrounding quotes left behind by the lexer  ← fix
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1]
+        elif len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+            value = value[1:-1]
+
+        # Escape sequence table – extend as your language grows
+        ESCAPE_SEQUENCES: dict[str, str] = {
+            "\\n": "\n",
+            "\\t": "\t",
+            "\\r": "\r",
+            "\\\\": "\\",
+            '\\"': '"',
+            "\\'": "'",
+            "\\0": "\0",
+        }
+
+        result = value
+        for escape, replacement in ESCAPE_SEQUENCES.items():
+            result = result.replace(escape, replacement)
+
+        return result
