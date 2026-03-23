@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from math import pi, sqrt
+
+from math import sqrt
 from typing import Any, List, Literal
 from app.eval.evaluator import Evaluator
 from app.eval.expression_builder import ExpressionStringBuilder
@@ -9,10 +9,12 @@ from app.eval.handler.comparison_handler import ComparisonHandler
 from app.eval.semantic_validation import SemanticValidation
 from app.eval.steps_recorder import StepRecorder
 from app.eval.variable_manager import VariableManager
-from app.models.CustomError import ErrorResponse, WarningResponse
+from app.models.MacroValue import MacroValue
+from app.models.SyntaxError import ErrorResponse, WarningResponse
 from app.models.Types import EvalType, TypeHandler
 from app.models.Variable import Variable, Position
-from app.models.custom_exceptions import EVALNameException, CastException, CoercionException, PowException
+from app.models.custom_exceptions import EVALNameException, CastException, CoercionException, PowException, BreakSignal, \
+    ContinueSignal
 from app.eval.postfix import Postfix
 from generated.EVALParser import EVALParser
 
@@ -20,6 +22,7 @@ try:
     from generated.EVALParserVisitor import EVALParserVisitor as BaseVisitor
 except ImportError:
     from antlr4 import ParseTreeVisitor as BaseVisitor
+
 
 
 class SemanticAnalyzer(BaseVisitor):
@@ -30,7 +33,6 @@ class SemanticAnalyzer(BaseVisitor):
         self.variable_manager = VariableManager(validator=self.validator)
         self.recorder         = StepRecorder()
 
-    # ── Error / warning access ────────────────────────────────────────────────
 
     @property
     def errors(self) -> List[ErrorResponse]:
@@ -40,6 +42,18 @@ class SemanticAnalyzer(BaseVisitor):
     def warnings(self) -> List[WarningResponse]:
         return self.validator.warnings
 
+
+
+    _CATCHABLE = (
+        ArithmeticError,    # division by zero, bad operand types, unary minus
+        ZeroDivisionError,  # direct zero-division (sub-class of ArithmeticError, listed for clarity)
+        TypeError,          # type mismatches from unary/binary expression visitors
+        CastException,      # invalid cast
+        PowException,       # pow() failures
+        EVALNameException,  # undeclared / unknown identifier
+        CoercionException,  # type coercion failure
+        ValueError,         # raised by comparison handlers
+    )
 
 
     def _record(
@@ -68,7 +82,149 @@ class SemanticAnalyzer(BaseVisitor):
             output_line=output_line,
         )
 
-    # ── Top-level ─────────────────────────────────────────────────────────────
+
+    def _error(
+        self,
+        phase:       str,
+        title:       str,
+        token:       Any,
+        msg:         str,
+        line:        int,
+        changed:     str = "",
+        detail:      str = "",
+        description: str = "",
+    ) -> None:
+        """
+        Push a semantic error and record the step in one call.
+        `description` defaults to `msg` when omitted; `detail` defaults to
+        ``"error: {msg}"`` when omitted.
+        """
+        self.validator.push_error(token, msg)
+        self._record(
+            phase=phase,
+            title=title,
+            description=description or msg,
+            line=line,
+            changed=changed,
+            detail=detail or f"error: {msg}",
+        )
+
+
+    def _run_comparison(self, ctx: Any, op: str, label: str) -> tuple:
+        """
+        Run a ComparisonHandler for equality/relational expressions.
+        Records and re-raises ValueError on failure.
+        Returns (left_val, right_val) on success.
+        """
+        handler = ComparisonHandler(
+            left_expr  = ctx.expression(0),
+            right_expr = ctx.expression(1),
+            visitor    = self,
+        )
+        try:
+            return handler.check()
+        except ValueError as exc:
+            self.validator.push_error(ctx.op, str(exc))
+            self._record(
+                phase="expression",
+                title=f"{label} check failed ({op})",
+                description=f"Comparison handler raised an error: {exc}",
+                line=ctx.start.line,
+                detail=f"error: {exc}",
+            )
+            raise exc
+
+
+    def _eval_postfix(self, ctx: Any, label: str, op: str, result_type) -> Any:
+        """
+        Build a postfix expression string, evaluate it, record the result, and
+        return it.  Returns None when the string cannot be built (indeterminate
+        operands).  ZeroDivisionError is intentionally not caught here — callers
+        that need division-by-zero handling should wrap this call themselves.
+        """
+        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
+        if expr_string is None:
+            return None
+        result = Postfix.get_result(expr_string)
+        self._record(
+            phase="expression",
+            title=f"{label} result ({op})",
+            description=f"Expression '{expr_string}' evaluated to {result!r} (type: {result_type.name}).",
+            line=ctx.start.line,
+            detail=f"expr={expr_string!r}, result={result!r}",
+        )
+        return result
+
+
+    def _visit_unary_numeric_call(self, ctx, fn, fn_name: str) -> Any:
+        """
+        Shared implementation for single-argument numeric built-ins (round, abs).
+        Validates the argument type, applies `fn`, records the result.
+        """
+        expression   = ctx.expression()
+        value        = self.visit(expression)
+        value_type   = self.variable_manager.get_type(value)
+        checked_type = self.validator.require_numeric(value_type, expression, f"{fn_name}() argument")
+
+
+        if checked_type == EvalType.UNKNOWN:
+            self._record(
+                phase="expression",
+                title=f"{fn_name}() type error",
+                description=f"{fn_name}() requires a numeric argument, got {value_type.name}.",
+                line=ctx.start.line,
+                detail=f"error: expected NUMERIC, got {value_type.name}",
+            )
+            return None
+
+        v  = VariableManager.unwrap_value(value)
+        result = fn(v)
+        self._record(
+            phase="expression",
+            title=f"{fn_name}() result",
+            description=f"{fn_name}({v!r}) → {result!r}.",
+            line=ctx.start.line,
+            detail=f"input={v!r}, result={result!r}",
+        )
+        return result
+
+
+    def _visit_binary_numeric_call(self, ctx, fn, fn_name: str) -> Any:
+        """
+        Shared implementation for two-argument numeric built-ins (min, max).
+        Validates both argument types, applies `fn`, records the result.
+        """
+        first_val  = self.visit(ctx.expression(0))
+        second_val = self.visit(ctx.expression(1))
+
+        first_type  = self.variable_manager.get_type(first_val)
+        second_type = self.variable_manager.get_type(second_val)
+
+        checked_type1 = self.validator.require_numeric(first_type,  ctx.expression(0), f"{fn_name}() first argument")
+        checked_type2 = self.validator.require_numeric(second_type, ctx.expression(1), f"{fn_name}() second argument")
+
+        if checked_type1 == EvalType.UNKNOWN or checked_type2 == EvalType.UNKNOWN:
+            self._record(
+                phase="expression",
+                title=f"{fn_name}() type error",
+                description=f"{fn_name}() requires numeric arguments — got {first_type.name} and {second_type.name}.",
+                line=ctx.start.line,
+                detail=f"error: types={first_type.name}, {second_type.name}",
+            )
+            return None
+
+        first_value  = VariableManager.unwrap_value(first_val)
+        second_value = VariableManager.unwrap_value(second_val)
+        result       = fn(first_value, second_value)
+        self._record(
+            phase="expression",
+            title=f"{fn_name}() result",
+            description=f"{fn_name}({first_value!r}, {second_value!r}) → {result!r}.",
+            line=ctx.start.line,
+            detail=f"a={first_value!r}, b={second_value!r}, result={result!r}",
+        )
+        return result
+
 
     def visitProgram(self, ctx) -> None:
         self._record(
@@ -88,77 +244,121 @@ class SemanticAnalyzer(BaseVisitor):
 
     def visitBlock(self, ctx) -> None:
         self.variable_manager.enter_scope("block")
+        statements = list(ctx.statement())
         self._record(
             phase="scope",
             title="Entered block scope",
-            description="A new block scope has been pushed onto the scope stack.",
+            description=f"New block scope pushed — {len(statements)} statement(s) to process.",
             line=ctx.start.line,
         )
 
-        for stmt in ctx.statement():
-            self.visit(stmt)
+        count = 0
+        try:
+            for i, stmt in enumerate(statements):
+                self._record(
+                    phase="scope",
+                    title=f"Block statement {i + 1}/{len(statements)}",
+                    description=f"Visiting statement {i + 1} of {len(statements)}: '{stmt.getText()}'.",
+                    line=stmt.start.line,
+                )
+                self.visit(stmt)
+                count += 1
 
-        self._record(
-            phase="scope",
-            title="Exiting block scope",
-            description="Block scope is being popped; local variables are released.",
-            line=ctx.stop.line if ctx.stop else 0,
-        )
-        self.variable_manager.exit_scope()
+        except (BreakSignal, ContinueSignal) as signal:
+            remaining = statements[count + 1:]
+            if remaining:
+                keyword = "break" if isinstance(signal, BreakSignal) else "continue"
+                self.validator.push_warnings(
+                    remaining[0].start,
+                    f"{len(remaining)} unreachable statement(s) after '{keyword}' "
+                    f"will never execute",
+                )
+                self._record(
+                    phase="scope",
+                    title=f"Unreachable statements after '{keyword}'",
+                    description=(
+                        f"{len(remaining)} statement(s) after '{keyword}' on line "
+                        f"{statements[count].start.line} will never execute."
+                    ),
+                    line=remaining[0].start.line,
+                )
+            raise
 
-    # ── Declarations ──────────────────────────────────────────────────────────
+        finally:
+            self._record(
+                phase="scope",
+                title="Exiting block scope",
+                description=f"Block scope popped — {count} of {len(statements)} statement(s) executed.",
+                line=ctx.stop.line if ctx.stop else 0,
+            )
+            self.variable_manager.exit_scope()
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Declarations
+    # ─────────────────────────────────────────────────────────────────────────
 
     def visitVariableDeclaration(self, ctx: EVALParser.VariableDeclarationContext) -> None:
         type_text = ctx.type_().getText()
         decl_type = TypeHandler.get_eval_type(type_text)
         ident_tok = ctx.IDENTIFIER().getSymbol()
-        name = ident_tok.text
-        line = ident_tok.line
+        name      = ident_tok.text
+        line      = ident_tok.line
 
 
         if self.validator.check_reserved_keyword(name, ident_tok):
             self._record(
                 phase="declaration",
-                title=f"Reserved name: {name}",
+                title=f"Reserved name blocked: {name}",
                 description=(
                     f"'{name}' is a reserved identifier and cannot be used "
-                    f"as a variable name."
+                    f"as a variable name — declaration aborted."
                 ),
                 line=line,
                 changed=name,
                 detail="error: reserved identifier",
             )
-            return  # Cannot safely proceed; stop processing this declaration
+            return
 
-
+        # ── Shadow check ──────────────────────────────────────────────────────
+        in_current   = self.variable_manager.is_defined_in_current_scope(name)
+        exists_outer = self.variable_manager.exists(name)
         self.validator.check_shadow(
             name=name,
             token=ident_tok,
-            is_in_current=self.variable_manager.is_defined_in_current_scope(name),
-            exists_outer=self.variable_manager.exists(name),
+            is_in_current=in_current,
+            exists_outer=exists_outer,
         )
+        if not in_current and exists_outer:
+            self._record(
+                phase="declaration",
+                title=f"Shadow warning: {name}",
+                description=f"'{name}' shadows an outer-scope variable — warning issued.",
+                line=line,
+                changed=name,
+                detail="warning: shadows outer declaration",
+            )
 
-
-        if self.variable_manager.is_defined_in_current_scope(name):
+        if in_current:
             msg = (
                 f"Variable '{name}' is already declared in the current scope "
                 f"[{self.variable_manager.get_scope_name()}]"
             )
-            self.validator.push_error(ident_tok, msg)
-            self._record(
+            self._error(
                 phase="declaration",
                 title=f"Duplicate declaration: {name}",
-                description=msg,
+                token=ident_tok,
+                msg=msg,
                 line=line,
                 changed=name,
                 detail="error: duplicate declaration",
             )
-
+            return
 
         var_value = self.visit(ctx.expression())
-        val_type = self.variable_manager.type_check(var_value)
+        val_type  = self.variable_manager.get_type(var_value)
 
-
+        # ── Cast-type consistency check ───────────────────────────────────────
         cast_target = self.validator.direct_cast_type(ctx.expression())
         if cast_target is not None and cast_target != decl_type:
             msg = (
@@ -166,26 +366,46 @@ class SemanticAnalyzer(BaseVisitor):
                 f"but variable '{name}' is declared as '{type_text}' — "
                 f"change either the cast target or the variable type"
             )
-            self.validator.push_error(ident_tok, msg)
-            self._record(
+            self._error(
                 phase="declaration",
                 title=f"Cast-type mismatch: {name}",
-                description=msg,
+                token=ident_tok,
+                msg=msg,
                 line=line,
                 changed=name,
                 detail=f"error: cast target '{cast_target.name}' != declared '{type_text}'",
             )
+            return
 
+        # ── Type compatibility check ──────────────────────────────────────────
         if val_type in TypeHandler.EMPTY or decl_type in TypeHandler.EMPTY:
             msg = (
                 f"cannot initialise '{type_text}' variable '{name}' "
                 f"with value of type '{val_type.name}'"
             )
-            self.validator.push_error(ident_tok, msg)
+            self._error(
+                phase="declaration",
+                title=f"Type error: {name}",
+                token=ident_tok,
+                msg=msg,
+                line=line,
+                changed=name,
+                detail=f"error: incompatible types — declared '{type_text}', got '{val_type.name}'",
+            )
+            return
 
-
+        # ── Narrowing check ───────────────────────────────────────────────────
         self.validator.check_narrowing(decl_type, val_type, name, ident_tok)
+        if decl_type == EvalType.INT and val_type == EvalType.FLOAT:
+            self._record(
+                phase="declaration",
+                title=f"Narrowing warning: {name}",
+                description=f"Float value implicitly narrowed to int for '{name}' — fractional part will be lost.",
+                line=line,
+                detail="warning: float → int narrowing",
+            )
 
+        # ── Coercion ──────────────────────────────────────────────────────────
         coerced_val = None
         try:
             coerced_val = Evaluator.coerce_to_declared_type(
@@ -195,8 +415,24 @@ class SemanticAnalyzer(BaseVisitor):
                 name=name,
                 type_text=type_text,
             )
+            self._record(
+                phase="declaration",
+                title=f"Coercion for {name}",
+                description=f"Value coerced to '{type_text}': {coerced_val!r}.",
+                line=line,
+                detail=f"coerced={coerced_val!r}",
+            )
         except CoercionException as e:
-            self.validator.push_error(ident_tok, str(e))
+            self._error(
+                phase="declaration",
+                title=f"Coercion failed: {name}",
+                token=ident_tok,
+                msg=str(e),
+                line=line,
+                description=f"Could not coerce value to '{type_text}': {e}",
+                detail=f"error: {e}",
+            )
+            return
 
         col, _ = self.validator.tok_col_line(ident_tok)
         variable = Variable(
@@ -222,6 +458,7 @@ class SemanticAnalyzer(BaseVisitor):
 
     def visitConstDeclaration(self, ctx: EVALParser.ConstDeclarationContext) -> None:
         variable_declaration = ctx.variableDeclaration()
+
         self.visit(variable_declaration)
 
         name = variable_declaration.IDENTIFIER().getText()
@@ -230,32 +467,29 @@ class SemanticAnalyzer(BaseVisitor):
             variable.constant = True
             self.variable_manager.define(variable)
 
-
             self._record(
                 phase="declaration",
                 title=f"Declared const: {name}",
-                description=f"Variable '{name}' marked as a constant.",
+                description=f"Variable '{name}' marked as constant — reassignment is now forbidden.",
                 line=variable_declaration.IDENTIFIER().getSymbol().line,
                 changed=name,
                 detail=f"const=True, value={variable.value!r}",
             )
         except EVALNameException as e:
-            self.validator.push_error(
-                variable_declaration.IDENTIFIER().getSymbol(),
-                f"{e} in this scope",
+            self._error(
+                phase="declaration",
+                title=f"Const lookup failed: {name}",
+                token=variable_declaration.IDENTIFIER().getSymbol(),
+                msg=f"{e} in this scope",
+                line=ctx.start.line,
+                description=f"Could not mark '{name}' as const — variable not found in scope: {e}",
+                detail=f"error: {e}",
             )
 
 
-
-    @staticmethod
-    def _is_non_numeric(t: EvalType) -> bool:
-        """
-        True when *t* is a concrete, known type that is NOT numeric.
-        Returns False for EMPTY/UNKNOWN sentinels (those are handled
-        separately as 'not yet resolved', not as type errors).
-        Used to gate compound operators (+=, -=, *=, /=).
-        """
-        return t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC
+    # ─────────────────────────────────────────────────────────────────────────
+    # Assignment
+    # ─────────────────────────────────────────────────────────────────────────
 
     def visitAssignment(self, ctx: EVALParser.AssignmentContext) -> None:
         ident_tok = ctx.IDENTIFIER().getSymbol()
@@ -263,74 +497,140 @@ class SemanticAnalyzer(BaseVisitor):
         op        = ctx.assignOp().getText()
         line      = ident_tok.line
 
+        # ── Variable lookup ───────────────────────────────────────────────────
         try:
             variable = self.variable_manager.get_variable(name)
-        except EVALNameException as e:
-            self.validator.push_error(ident_tok, f"{e} in this scope")
-            return
-
-        if variable.constant:
-            self.validator.push_error(
-                ident_tok,
-                f"cannot reassign const variable '{name}'",
-            )
             self._record(
                 phase="assignment",
+                title=f"Variable found: {name}",
+                description=(
+                    f"'{name}' resolved — current value: {variable.value!r}, "
+                    f"type: {self.variable_manager.get_type(variable).name}."
+                ),
+                line=line,
+                detail=f"current_value={variable.value!r}",
+            )
+        except EVALNameException as e:
+            self._error(
+                phase="assignment",
+                title=f"Undeclared variable: {name}",
+                token=ident_tok,
+                msg=f"{e} in this scope",
+                line=line,
+                description=f"'{name}' is not declared in any accessible scope — assignment aborted.",
+                detail=f"error: {e}",
+            )
+            return
+
+        # ── Const guard ───────────────────────────────────────────────────────
+        if variable.constant:
+            self._error(
+                phase="assignment",
                 title=f"Const reassignment blocked: {name}",
-                description=f"Attempted to reassign const variable '{name}'",
+                token=ident_tok,
+                msg=f"cannot reassign const variable '{name}'",
                 line=line,
                 changed=name,
+                description=f"Attempted to reassign const variable '{name}' — operation rejected.",
                 detail="error: const reassignment",
             )
             return
 
-        rhs      = self.visit(ctx.expression())
-        rhs_type = self.variable_manager.type_check(rhs)
-        rhs_val  = VariableManager.unwrap_value(rhs)
-        var_type = self.variable_manager.type_check(variable)
+        # ── Evaluate RHS ──────────────────────────────────────────────────────
+        rhs       = self.visit(ctx.expression())
+        rhs_type  = self.variable_manager.get_type(rhs)
+        rhs_val   = VariableManager.unwrap_value(rhs)
+        var_type  = self.variable_manager.get_type(variable)
         old_value = variable.value
+
+        self._record(
+            phase="assignment",
+            title=f"RHS evaluated for {name}",
+            description=f"RHS = {rhs_val!r} (type: {rhs_type.name}), LHS type: {var_type.name}.",
+            line=line,
+            detail=f"rhs_val={rhs_val!r}, rhs_type={rhs_type.name}, var_type={var_type.name}",
+        )
 
         if op == "=":
             if (
                 var_type not in TypeHandler.EMPTY
                 and not self.validator.types_compatible(var_type, rhs_type)
             ):
-                self.validator.push_error(
-                    ident_tok,
-                    f"cannot assign {rhs_type.name} to '{var_type.name}' variable '{name}'",
+                self._error(
+                    phase="assignment",
+                    title=f"Type mismatch: {name}",
+                    token=ident_tok,
+                    msg=f"cannot assign {rhs_type.name} to '{var_type.name}' variable '{name}'",
+                    line=line,
+                    description=(
+                        f"Cannot assign {rhs_type.name} value to '{var_type.name}' "
+                        f"variable '{name}' — assignment aborted."
+                    ),
+                    detail=f"error: {rhs_type.name} → {var_type.name}",
                 )
                 return
             variable.value = rhs_val
 
         else:
-            if self._is_non_numeric(var_type):
-                self.validator.push_error(
-                    ident_tok,
-                    f"compound operator '{op}' requires a numeric variable; "
-                    f"'{name}' is {var_type.name}",
+            # ── Compound operators (+=, -=, *=, /=, %=) ──────────────────────
+            if Evaluator.is_non_numeric(var_type):
+                self._error(
+                    phase="assignment",
+                    title=f"Compound op type error: {name}",
+                    token=ident_tok,
+                    msg=(
+                        f"compound operator '{op}' requires a numeric variable; "
+                        f"'{name}' is {var_type.name}"
+                    ),
+                    line=line,
+                    description=f"'{op}' requires a numeric variable; '{name}' is {var_type.name}.",
+                    detail=f"error: non-numeric LHS ({var_type.name})",
                 )
                 return
 
-            if self._is_non_numeric(rhs_type):
-                self.validator.push_error(
-                    ident_tok,
-                    f"compound operator '{op}' requires a numeric right-hand side, "
-                    f"got {rhs_type.name}",
+            if Evaluator.is_non_numeric(rhs_type):
+                self._error(
+                    phase="assignment",
+                    title=f"Compound op RHS type error: {name}",
+                    token=ident_tok,
+                    msg=(
+                        f"compound operator '{op}' requires a numeric right-hand side, "
+                        f"got {rhs_type.name}"
+                    ),
+                    line=line,
+                    description=f"'{op}' requires numeric RHS; got {rhs_type.name}.",
+                    detail=f"error: non-numeric RHS ({rhs_type.name})",
                 )
                 return
 
             cur_val = VariableManager.unwrap_value(variable)
-            if isinstance(cur_val, (int, float)) and isinstance(rhs_val, (int, float)):
+            if self.validator.is_numeric_val(cur_val) and self.validator.is_numeric_val(rhs_val):
                 new_val, err = Evaluator.apply_compound_op(op, cur_val, rhs_val)
                 if err:
-                    self.validator.push_error(ident_tok, err)
+                    self._error(
+                        phase="assignment",
+                        title=f"Compound op failed: {name}",
+                        token=ident_tok,
+                        msg=err,
+                        line=line,
+                        description=f"Compound op '{op}' failed: {err}",
+                        detail=f"error: {err}",
+                    )
                     return
                 elif new_val is not None:
-                    new_val_type = self.variable_manager.type_check(new_val)
+                    new_val_type = self.variable_manager.get_type(new_val)
                     self.validator.check_narrowing(var_type, new_val_type, name, ident_tok)
                     coerced, err = Evaluator.coerce_for_assignment(new_val, var_type, new_val_type, name)
                     if err:
-                        self.validator.push_error(ident_tok, err)
+                        self._error(
+                            phase="assignment",
+                            title=f"Coercion failed: {name}",
+                            token=ident_tok,
+                            msg=err,
+                            line=line,
+                            description=f"Compound op coercion failed: {err}",
+                            detail=f"error: {err}",
+                        )
                         return
                     else:
                         variable.value = coerced
@@ -345,17 +645,28 @@ class SemanticAnalyzer(BaseVisitor):
             ),
             line=line,
             changed=name,
-            detail=f"op={op}, rhs={rhs_val!r}",
+            detail=f"op={op}, rhs={rhs_val!r}, old={old_value!r}, new={variable.value!r}",
         )
 
 
     def visitPrintStatement(self, ctx: EVALParser.PrintStatementContext) -> str:
+        args = list(ctx.printArg())
 
         parts = []
-        for arg in ctx.printArg():
+        for idx, arg in enumerate(args):
             val = self.visit(arg)
             raw = VariableManager.unwrap_value(val)
-            parts.append("" if raw is None else str(raw))
+            part = Evaluator.process_print_arg(raw)
+
+
+            parts.append(part)
+            self._record(
+                phase="output",
+                title=f"Print arg {idx + 1}/{len(args)}",
+                description=f"Argument {idx + 1} ('{arg.getText()}') evaluated to {raw!r}.",
+                line=arg.start.line,
+                detail=f"arg={arg.getText()!r}, value={raw!r}",
+            )
 
         output_line = " ".join(parts)
         self._record(
@@ -386,84 +697,114 @@ class SemanticAnalyzer(BaseVisitor):
             line=ctx.start.line,
         )
 
-        # Track whether any branch was taken.  Once a condition is known-true
-        # we execute that block and stop evaluating further conditions — exactly
-        # the semantics of a real if / else-if / else chain.
         branch_taken = False
 
         for i, expr in enumerate(expressions):
-            cond_result = self.visit(expr)
-            cond_type   = self.variable_manager.type_check(cond_result)
-            cond_value  = VariableManager.unwrap_value(cond_result)
             branch_label = "if" if i == 0 else f"else if [{i}]"
 
-            # ── Type error: condition is not boolean ──────────────────────────
-            # Push the diagnostic but do NOT execute the associated block and
-            # do NOT set branch_taken — continue checking remaining branches so
-            # every condition gets validated in a single pass.
+            self._record(
+                phase="control_flow",
+                title=f"Evaluating condition ({branch_label})",
+                description=f"Evaluating {branch_label} condition: '{expr.getText()}'.",
+                line=expr.start.line,
+            )
+
+            cond_result = self.visit(expr)
+            cond_type   = self.variable_manager.get_type(cond_result)
+            cond_value  = VariableManager.unwrap_value(cond_result)
+
             if cond_type != EvalType.BOOL:
                 self.validator.push_error(
                     expr.start,
                     f"{branch_label} condition must be bool, got {cond_type.name}",
                 )
+                self._record(
+                    phase="control_flow",
+                    title=f"Condition type error ({branch_label})",
+                    description=(
+                        f"{branch_label} condition '{expr.getText()}' has type "
+                        f"{cond_type.name}, expected bool — branch skipped."
+                    ),
+                    line=expr.start.line,
+                    detail=f"error: expected BOOL, got {cond_type.name}",
+                )
                 continue
 
             self._record(
                 phase="control_flow",
-                title=f"Condition ({branch_label})",
+                title=f"Condition result ({branch_label})",
                 description=(
                     f"{branch_label} condition '{expr.getText()}' "
                     f"evaluated to {cond_value!r}."
                 ),
                 line=expr.start.line,
-                detail=f"type={cond_type}, value={cond_value!r}",
+                detail=f"type={cond_type.name}, value={cond_value!r}",
             )
 
             if cond_value is True:
-                # Known-true: execute this block and stop.  Remaining
-                # else-if conditions are never evaluated — same as any
-                # real language runtime.
+                self._record(
+                    phase="control_flow",
+                    title=f"Branch taken ({branch_label})",
+                    description=f"Condition is True — entering {branch_label} block.",
+                    line=blocks[i].start.line,
+                )
                 self.visit(blocks[i])
                 branch_taken = True
                 break
 
             elif cond_value is False:
-                # Known-false: skip this block and check the next condition.
                 self._record(
                     phase="control_flow",
                     title=f"Branch skipped ({branch_label})",
-                    description=(
-                        f"{branch_label} condition is False — branch not taken."
-                    ),
+                    description=f"{branch_label} condition is False — branch not taken.",
                     line=expr.start.line,
                 )
                 continue
 
             else:
-                # Statically indeterminate (e.g. variable not yet resolved):
-                # visit the block for error analysis but do not set
-                # branch_taken so the else is still examined as well.
+                # Statically indeterminate — visit block to collect errors.
+                self._record(
+                    phase="control_flow",
+                    title=f"Condition indeterminate ({branch_label})",
+                    description=(
+                        f"{branch_label} condition '{expr.getText()}' cannot be resolved "
+                        f"statically — visiting block to collect any errors inside it."
+                    ),
+                    line=expr.start.line,
+                    detail="indeterminate: both branches analysed",
+                )
                 self.visit(blocks[i])
 
-        # ── Else block ────────────────────────────────────────────────────────
-        # Execute only when no if/else-if branch was taken.
         if has_else and not branch_taken:
             self._record(
                 phase="control_flow",
-                title="Else branch",
+                title="Else branch taken",
                 description="No preceding condition was true — executing else branch.",
                 line=blocks[-1].start.line,
             )
             self.visit(blocks[-1])
+        elif has_else and branch_taken:
+            self._record(
+                phase="control_flow",
+                title="Else branch skipped",
+                description="A preceding branch was taken — else block will not execute.",
+                line=blocks[-1].start.line,
+            )
 
     def visitWhileStatement(self, ctx: EVALParser.WhileStatementContext) -> None:
-        _MAX_ITERATIONS = 1_000   # safety cap — prevents runaway infinite loops
+        _MAX_ITERATIONS = 1_000
 
         expr = ctx.expression()
 
-        # ── 1. Initial condition check (type validation + early-exit warnings) ──
+        self._record(
+            phase="control_flow",
+            title="While statement",
+            description=f"Evaluating initial while condition: '{expr.getText()}'.",
+            line=ctx.start.line,
+        )
+
         cond_result = self.visit(expr)
-        cond_type   = self.variable_manager.type_check(cond_result)
+        cond_type   = self.variable_manager.get_type(cond_result)
         cond_value  = VariableManager.unwrap_value(cond_result)
 
         if cond_type not in (EvalType.BOOL, EvalType.UNKNOWN, None):
@@ -471,8 +812,14 @@ class SemanticAnalyzer(BaseVisitor):
                 expr.start,
                 f"while condition must be bool, got {cond_type.name}",
             )
+            self._record(
+                phase="control_flow",
+                title="While condition type error",
+                description=f"Condition has type {cond_type.name}, expected bool.",
+                line=ctx.start.line,
+                detail=f"error: expected BOOL, got {cond_type.name}",
+            )
 
-        # Condition is statically False — body is dead code, skip entirely.
         if cond_value is False:
             self.validator.push_warnings(
                 expr.start,
@@ -480,7 +827,7 @@ class SemanticAnalyzer(BaseVisitor):
             )
             self._record(
                 phase="control_flow",
-                title="While loop (skipped)",
+                title="While loop skipped (condition always false)",
                 description=(
                     f"while condition '{expr.getText()}' evaluated to False — "
                     f"loop body will never execute."
@@ -495,73 +842,99 @@ class SemanticAnalyzer(BaseVisitor):
             title="While loop entered",
             description=(
                 f"while condition '{expr.getText()}' "
-                f"evaluated to {cond_value!r} — beginning loop."
+                f"evaluated to {cond_value!r} — beginning loop execution."
             ),
             line=ctx.start.line,
             detail=f"type={cond_type}, value={cond_value!r}",
         )
 
-        # ── 2. Execute the loop body repeatedly until the condition is False ──
         self._loop_depth += 1
         iteration = 0
+        try:
+            while True:
+                cond_result = self.visit(expr)
+                cond_value  = VariableManager.unwrap_value(cond_result)
 
-        while True:
-            # Re-evaluate the condition using the current variable state.
-            # visitAssignment keeps variable_manager up to date after every
-            # assignment inside the block, so this naturally picks up changes
-            # made in the previous iteration.
-            cond_result = self.visit(expr)
-            cond_value  = VariableManager.unwrap_value(cond_result)
+                if cond_value is not True:
+                    self._record(
+                        phase="control_flow",
+                        title="While condition false — loop exited",
+                        description=(
+                            f"After {iteration} iteration(s), condition "
+                            f"'{expr.getText()}' is now False — loop ends."
+                        ),
+                        line=ctx.start.line,
+                    )
+                    break
 
-            # Condition is now False — exit the loop normally.
-            if not cond_value:
+                if iteration >= _MAX_ITERATIONS:
+                    self.validator.push_warnings(
+                        expr.start,
+                        f"while loop halted after {_MAX_ITERATIONS} iterations "
+                        f"— possible infinite loop",
+                    )
+                    self._record(
+                        phase="control_flow",
+                        title="While loop halted (max iterations reached)",
+                        description=(
+                            f"Loop exceeded the {_MAX_ITERATIONS}-iteration safety "
+                            f"cap and was stopped to prevent an infinite loop."
+                        ),
+                        line=ctx.start.line,
+                    )
+                    break
+
+                iteration += 1
                 self._record(
                     phase="control_flow",
-                    title=f"While condition false — loop exited",
+                    title=f"While iteration {iteration}",
                     description=(
-                        f"After {iteration} iteration(s), condition "
-                        f"'{expr.getText()}' is now False — loop ends."
+                        f"Condition '{expr.getText()}' = {cond_value!r} — "
+                        f"executing loop body (iteration {iteration})."
                     ),
-                    line=ctx.start.line,
+                    line=ctx.block().start.line,
+                    detail=f"iteration={iteration}, condition={cond_value!r}",
                 )
-                break
 
-            # Safety guard: halt before we spin forever.
-            if iteration >= _MAX_ITERATIONS:
-                self.validator.push_warnings(
-                    expr.start,
-                    f"while loop halted after {_MAX_ITERATIONS} iterations "
-                    f"— possible infinite loop",
-                )
-                self._record(
-                    phase="control_flow",
-                    title="While loop halted (max iterations)",
-                    description=(
-                        f"Loop exceeded the {_MAX_ITERATIONS}-iteration safety "
-                        f"cap and was stopped."
-                    ),
-                    line=ctx.start.line,
-                )
-                break
+                try:
+                    self.visit(ctx.block())
 
-            iteration += 1
+                except ContinueSignal:
+                    self._record(
+                        phase="control_flow",
+                        title=f"Continue — iteration {iteration}",
+                        description=(
+                            f"continue hit on iteration {iteration}; "
+                            f"re-evaluating loop condition."
+                        ),
+                        line=ctx.start.line,
+                    )
+                    continue
+
+                except BreakSignal:
+                    self._record(
+                        phase="control_flow",
+                        title=f"Break — loop exited at iteration {iteration}",
+                        description=(
+                            f"break hit on iteration {iteration}; "
+                            f"exiting loop."
+                        ),
+                        line=ctx.start.line,
+                    )
+                    break
+
+        finally:
+            self._loop_depth -= 1
             self._record(
                 phase="control_flow",
-                title=f"While iteration {iteration}",
+                title="While loop complete",
                 description=(
-                    f"Condition '{expr.getText()}' = {cond_value!r} — "
-                    f"executing loop body (iteration {iteration})."
+                    f"Loop finished after {iteration} iteration(s). "
+                    f"Loop depth restored to {self._loop_depth}."
                 ),
-                line=ctx.block().start.line,
+                line=ctx.start.line,
+                detail=f"iterations={iteration}, loop_depth={self._loop_depth}",
             )
-
-            # Visit the block. visitBlock pushes/pops its own scope, so
-            # variables declared inside the loop are correctly re-created and
-            # discarded each iteration, while outer-scope variables (e.g. the
-            # loop counter) persist and are mutated across iterations.
-            self.visit(ctx.block())
-
-        self._loop_depth -= 1
 
     def visitTryStatement(self, ctx: EVALParser.TryStatementContext) -> None:
         try_block   = ctx.block(0)
@@ -570,299 +943,706 @@ class SemanticAnalyzer(BaseVisitor):
         catch_name  = ident_tok.text
         col, line   = self.validator.tok_col_line(ident_tok)
 
-        # ── Reserved-name guard for the catch parameter ──────────────────────
-        # The catch clause binds a new identifier in the catch scope; it is
-        # subject to the same reserved-name restriction as any variable.
-        if self.validator.check_reserved_keyword(catch_name, ident_tok):
+        self._record(
+            phase="control_flow",
+            title="Try/catch statement",
+            description=f"Processing try block with catch parameter '{catch_name}' on line {line}.",
+            line=ctx.start.line,
+        )
+
+        # ── Keyword check: WARNING only, never a hard error ───────────────────
+        errors_before_kw = len(self.errors)
+        is_reserved = self.validator.check_reserved_keyword(catch_name, ident_tok)
+        if is_reserved:
+            # Strip the error check_reserved_keyword pushed and downgrade to warning.
+            while len(self.errors) > errors_before_kw:
+                self.errors.pop()
+            self.validator.push_warnings(
+                ident_tok,
+                f"'{catch_name}' is a reserved identifier; "
+                f"using it as a catch parameter name is discouraged",
+            )
             self._record(
                 phase="control_flow",
-                title=f"Reserved catch parameter: {catch_name}",
+                title=f"Reserved catch parameter (warning): {catch_name}",
                 description=(
-                    f"'{catch_name}' is a reserved identifier and cannot be "
-                    f"used as a catch parameter name."
+                    f"'{catch_name}' is a reserved identifier — "
+                    f"warning issued, analysis continues."
                 ),
                 line=line,
                 changed=catch_name,
-                detail="error: reserved identifier",
+                detail="warning: reserved identifier — downgraded from error",
             )
-            # We still analyse both blocks so subsequent errors are reported.
 
+        # ── Try block ─────────────────────────────────────────────────────────
+        # visitBlock handles its own scope push/pop.  We wrap in a Python
+        # try/except so runtime exceptions are intercepted here.
+        # BreakSignal / ContinueSignal are NOT errors — re-raise immediately.
         self._record(
             phase="control_flow",
-            title="Try block",
-            description="Entering try block.",
+            title="Entering try block",
+            description="Visiting try block — any runtime exceptions will be intercepted.",
             line=try_block.start.line,
         )
-        self.visit(try_block)
 
+        errors_before_try              = len(self.errors)
+        caught_exception: Exception | None = None
+        caught_line: int               = try_block.start.line
+
+        try:
+            self.visit(try_block)
+        except (BreakSignal, ContinueSignal):
+            raise
+        except self._CATCHABLE as exc:
+            caught_exception = exc
+            caught_line      = try_block.start.line
+
+        errors_after_try = len(self.errors)
+
+        # ── Record what happened inside the try block ─────────────────────────
+        if caught_exception is not None:
+            self._record(
+                phase="control_flow",
+                title="Exception intercepted in try block",
+                description=(
+                    f"[{type(caught_exception).__name__}] raised inside try block: "
+                    f"{caught_exception}"
+                ),
+                line=caught_line,
+                detail=f"exception={type(caught_exception).__name__}: {caught_exception}",
+            )
+        elif errors_after_try > errors_before_try:
+            self._record(
+                phase="control_flow",
+                title="Semantic errors in try block",
+                description=(
+                    f"{errors_after_try - errors_before_try} new semantic error(s) "
+                    f"produced inside the try block."
+                ),
+                line=try_block.start.line,
+                detail=f"new_errors={errors_after_try - errors_before_try}",
+            )
+        else:
+            self._record(
+                phase="control_flow",
+                title="Try block completed without errors",
+                description="No exceptions or semantic errors were raised in the try block.",
+                line=try_block.start.line,
+            )
+
+        # ── Decide whether to enter the catch block ───────────────────────────
+        has_error = caught_exception is not None or errors_after_try > errors_before_try
+
+        if not has_error:
+            self._record(
+                phase="control_flow",
+                title="Catch block skipped",
+                description="No errors in the try block — catch block will not execute.",
+                line=catch_block.start.line,
+            )
+            return
+
+        # ── Build catch_var value from exception + validator errors ───────────
+        # ErrorResponse fields: message (str), line_number (int), column_number (int)
+        parts: list[str] = []
+        if caught_exception is not None:
+            exc_type = type(caught_exception).__name__
+            parts.append(f" {exc_type}: ")
+        new_validator_errors = self.errors[errors_before_try:]
+        for err in new_validator_errors:
+            parts.append(f"line {err.line_number}: {err.message}")
+        error_details: str = " ".join(parts) if parts else "error occurred"
+
+        # ── Catch block — its own fresh scope, separate from the try scope ────
         self.variable_manager.enter_scope("catch")
-        catch_var = Variable(
-            name=catch_name,
-            type=EvalType.UNKNOWN,
-            value=None,
-            position=Position(line=line, column=col),
-        )
-        self.variable_manager.define(catch_var)
+        try:
+            # catch_var is defined HERE — only when an error actually occurred,
+            # typed as STRING so the user can print / inspect the message.
+            catch_var = Variable(
+                name=catch_name,
+                type=EvalType.STRING,
+                value=error_details,
+                position=Position(line=line, column=col),
+            )
+            self.variable_manager.define(catch_var)
 
-        self._record(
-            phase="control_flow",
-            title="Catch block",
-            description=f"Entering catch block with exception variable '{catch_name}'.",
-            line=catch_block.start.line,
-            changed=catch_name,
-            detail=f"exception variable '{catch_name}' bound as UNKNOWN type",
-        )
+            self._record(
+                phase="control_flow",
+                title=f"Catch variable defined: {catch_name}",
+                description=(
+                    f"'{catch_name}' defined as STRING in catch scope with error details."
+                ),
+                line=line,
+                changed=catch_name,
+                detail=f"type=STRING, value={error_details!r}",
+            )
 
-        # Visit statements directly — do NOT call self.visit(catch_block)
-        # because visitBlock would push a second scope on top of this one.
-        for stmt in catch_block.statement():
-            self.visit(stmt)
+            self._record(
+                phase="control_flow",
+                title="Entering catch block",
+                description=f"Visiting catch block — '{catch_name}' is available as a STRING.",
+                line=catch_block.start.line,
+            )
 
-        self._record(
-            phase="control_flow",
-            title="Exiting catch block",
-            description=f"Catch block complete; releasing '{catch_name}' from scope.",
-            line=catch_block.stop.line if catch_block.stop else line,
-        )
-        self.variable_manager.exit_scope()
+            # Visit statements directly — do NOT call self.visit(catch_block)
+            # because visitBlock would push a second scope on top of this one.
+            statements = list(catch_block.statement())
+            for i, stmt in enumerate(statements):
+                self._record(
+                    phase="control_flow",
+                    title=f"Catch statement {i + 1}/{len(statements)}",
+                    description=f"Visiting catch statement {i + 1}: '{stmt.getText()}'.",
+                    line=stmt.start.line,
+                )
+                try:
+                    self.visit(stmt)
+                except (BreakSignal, ContinueSignal) as signal:
+                    remaining = statements[i + 1:]
+                    if remaining:
+                        keyword = "break" if isinstance(signal, BreakSignal) else "continue"
+                        self.validator.push_warnings(
+                            remaining[0].start,
+                            f"{len(remaining)} unreachable statement(s) after "
+                            f"'{keyword}' will never execute",
+                        )
+                        self._record(
+                            phase="control_flow",
+                            title=f"Unreachable statements in catch after '{keyword}'",
+                            description=(
+                                f"{len(remaining)} statement(s) after '{keyword}' "
+                                f"in catch block will never execute."
+                            ),
+                            line=remaining[0].start.line,
+                        )
+                    raise
+
+        finally:
+            self._record(
+                phase="control_flow",
+                title="Exiting catch block",
+                description=f"Catch block complete — releasing '{catch_name}' from scope.",
+                line=catch_block.stop.line if catch_block.stop else line,
+            )
+            self.variable_manager.exit_scope()
 
     def visitBreakStatement(self, ctx: EVALParser.BreakStatementContext) -> None:
         if self._loop_depth == 0:
-            self.validator.push_error(ctx.start, "'break' used outside of a loop")
+            self._error(
+                phase="control_flow",
+                title="Break (error — outside loop)",
+                token=ctx.start,
+                msg="'break' used outside of a loop",
+                line=ctx.start.line,
+                description="'break' has no enclosing loop — statement has no effect.",
+                detail="error: break outside loop",
+            )
+            return
+
         self._record(
             phase="control_flow",
-            title="Break statement",
-            description="break encountered.",
+            title="Break",
+            description=f"break encountered at loop depth {self._loop_depth} — signalling loop exit.",
             line=ctx.start.line,
+            detail=f"loop_depth={self._loop_depth}",
         )
+        raise BreakSignal()
 
     def visitContinueStatement(self, ctx: EVALParser.ContinueStatementContext) -> None:
         if self._loop_depth == 0:
-            self.validator.push_error(ctx.start, "'continue' used outside of a loop")
+            self._error(
+                phase="control_flow",
+                title="Continue (error — outside loop)",
+                token=ctx.start,
+                msg="'continue' used outside of a loop",
+                line=ctx.start.line,
+                description="'continue' has no enclosing loop — statement has no effect.",
+                detail="error: continue outside loop",
+            )
+            return
+
         self._record(
             phase="control_flow",
-            title="Continue statement",
-            description="continue encountered.",
+            title="Continue",
+            description=f"continue encountered at loop depth {self._loop_depth} — signalling skip to next iteration.",
+            line=ctx.start.line,
+            detail=f"loop_depth={self._loop_depth}",
+        )
+        raise ContinueSignal()
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Binary / unary expressions
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def visitLogicalOrExpr(self, ctx: EVALParser.LogicalOrExprContext) -> bool | None:
+        self._record(
+            phase="expression",
+            title="Logical OR (||)",
+            description=f"Evaluating left operand of '||': '{ctx.expression(0).getText()}'.",
+            line=ctx.start.line,
+        )
+        left_result = self.visit(ctx.expression(0))
+        lt          = self.variable_manager.get_type(left_result)
+        left_val    = VariableManager.unwrap_value(left_result)
+
+        if left_val is True:
+            self.validator.check_logical_operands("||", lt, lt, ctx.start)
+            self._record(
+                phase="expression",
+                title="Logical OR short-circuit (left=True)",
+                description="Left operand is True — right not evaluated (short-circuit). Result: True.",
+                line=ctx.start.line,
+                detail="short-circuit: True || any → True",
+            )
+            return True
+
+        self._record(
+            phase="expression",
+            title="Logical OR — evaluating right operand",
+            description=f"Left is {left_val!r} — evaluating right: '{ctx.expression(1).getText()}'.",
+            line=ctx.start.line,
+        )
+        right_result = self.visit(ctx.expression(1))
+        rt           = self.variable_manager.get_type(right_result)
+        right_val    = VariableManager.unwrap_value(right_result)
+
+        self.validator.check_logical_operands("||", lt, rt, ctx.start)
+
+        if isinstance(left_val, bool) and isinstance(right_val, bool):
+            result = left_val or right_val
+            self._record(
+                phase="expression",
+                title="Logical OR result",
+                description=f"{left_val!r} || {right_val!r} = {result!r}.",
+                line=ctx.start.line,
+                detail=f"left={left_val!r}, right={right_val!r}, result={result!r}",
+            )
+            return result
+
+        self._record(
+            phase="expression",
+            title="Logical OR result (indeterminate)",
+            description="One or both operands are not statically known — result is indeterminate.",
+            line=ctx.start.line,
+        )
+        return None
+
+    def visitLogicalAndExpr(self, ctx: EVALParser.LogicalAndExprContext) -> bool | None:
+        self._record(
+            phase="expression",
+            title="Logical AND (&&)",
+            description=f"Evaluating left operand of '&&': '{ctx.expression(0).getText()}'.",
+            line=ctx.start.line,
+        )
+        left_result = self.visit(ctx.expression(0))
+        lt          = self.variable_manager.get_type(left_result)
+        left_val    = VariableManager.unwrap_value(left_result)
+
+        if left_val is False:
+            self.validator.check_logical_operands("&&", lt, lt, ctx.start)
+            self._record(
+                phase="expression",
+                title="Logical AND short-circuit (left=False)",
+                description="Left operand is False — right not evaluated (short-circuit). Result: False.",
+                line=ctx.start.line,
+                detail="short-circuit: False && any → False",
+            )
+            return False
+
+        self._record(
+            phase="expression",
+            title="Logical AND — evaluating right operand",
+            description=f"Left is {left_val!r} — evaluating right: '{ctx.expression(1).getText()}'.",
+            line=ctx.start.line,
+        )
+        right_result = self.visit(ctx.expression(1))
+        rt           = self.variable_manager.get_type(right_result)
+        right_val    = VariableManager.unwrap_value(right_result)
+
+        self.validator.check_logical_operands("&&", lt, rt, ctx.start)
+
+        if isinstance(left_val, bool) and isinstance(right_val, bool):
+            result = left_val and right_val
+            self._record(
+                phase="expression",
+                title="Logical AND result",
+                description=f"{left_val!r} && {right_val!r} = {result!r}.",
+                line=ctx.start.line,
+                detail=f"left={left_val!r}, right={right_val!r}, result={result!r}",
+            )
+            return result
+
+        self._record(
+            phase="expression",
+            title="Logical AND result (indeterminate)",
+            description="One or both operands are not statically known — result is indeterminate.",
+            line=ctx.start.line,
+        )
+        return None
+
+    def visitEqualityExpr(self, ctx: EVALParser.EqualityExprContext) -> Literal[EvalType.BOOL] | bool:
+        op = ctx.op.text
+        self._record(
+            phase="expression",
+            title=f"Equality expression ({op})",
+            description=f"Evaluating '{ctx.expression(0).getText()}' {op} '{ctx.expression(1).getText()}'.",
             line=ctx.start.line,
         )
 
-    # ── Binary / unary expressions ────────────────────────────────────────────
-
-    def visitLogicalOrExpr(self, ctx: EVALParser.LogicalOrExprContext) -> bool | EvalType:
-        left_result  = self.visit(ctx.expression(0))
-        right_result = self.visit(ctx.expression(1))
-
-        lt = self.variable_manager.type_check(left_result)
-        rt = self.variable_manager.type_check(right_result)
-        self.validator.check_logical_operands("||", lt, rt, ctx.start)
-
-        # When both sides resolve to concrete booleans, compute and return the
-        # actual result so callers (e.g. visitIfStatement) can make a definite
-        # branching decision rather than receiving a type sentinel.
-        left_val  = VariableManager.unwrap_value(left_result)
-        right_val = VariableManager.unwrap_value(right_result)
-        if isinstance(left_val, bool) and isinstance(right_val, bool):
-            return left_val or right_val
-
-        return EvalType.BOOL
-
-    def visitLogicalAndExpr(self, ctx: EVALParser.LogicalAndExprContext) -> bool | EvalType:
-        left_result  = self.visit(ctx.expression(0))
-        right_result = self.visit(ctx.expression(1))
-
-        lt = self.variable_manager.type_check(left_result)
-        rt = self.variable_manager.type_check(right_result)
-        self.validator.check_logical_operands("&&", lt, rt, ctx.start)
-
-        # Same reasoning as visitLogicalOrExpr — return the concrete result when
-        # both operands are known so downstream branching is accurate.
-        left_val  = VariableManager.unwrap_value(left_result)
-        right_val = VariableManager.unwrap_value(right_result)
-        if isinstance(left_val, bool) and isinstance(right_val, bool):
-            return left_val and right_val
-
-        return EvalType.BOOL
-
-    def visitEqualityExpr(self, ctx: EVALParser.EqualityExprContext) -> Literal[EvalType.BOOL] | bool:
-        lt = self.variable_manager.type_check(self.visit(ctx.expression(0)))
-        rt = self.variable_manager.type_check(self.visit(ctx.expression(1)))
-        op = ctx.op.text
+        left_visited  = self.visit(ctx.expression(0))
+        right_visited = self.visit(ctx.expression(1))
+        lt = self.variable_manager.get_type(left_visited)
+        rt = self.variable_manager.get_type(right_visited)
 
         self.validator.check_float_equality(op, lt, rt, ctx.start)
 
-        handler = ComparisonHandler(
-            left_expr=ctx.expression(0),
-            right_expr=ctx.expression(1),
-            visitor=self,
+        left_val, right_val = self._run_comparison(ctx, op, "Equality")
+
+        result = Evaluator.evaluate_relational(left_val, op, right_val)
+        self._record(
+            phase="expression",
+            title=f"Equality result ({op})",
+            description=f"{left_val!r} {op} {right_val!r} → {result!r} (left: {lt.name}, right: {rt.name}).",
+            line=ctx.start.line,
+            detail=f"left={left_val!r} ({lt.name}), right={right_val!r} ({rt.name}), result={result!r}",
         )
-        try:
-            left_val, right_val = handler.check()
-        except ValueError as exc:
-            self.validator.push_error(ctx.op, str(exc))
-            return EvalType.BOOL
+        return result
 
-        return Evaluator.evaluate_relational(left_val, op, right_val)
-
-    def visitRelationalExpr(self, ctx: EVALParser.RelationalExprContext) -> bool | EvalType:
-
+    def visitRelationalExpr(self, ctx: EVALParser.RelationalExprContext) -> bool:
         op = ctx.op.text
-
-        handler = ComparisonHandler(
-            left_expr  = ctx.expression(0),
-            right_expr = ctx.expression(1),
-            visitor    = self,
+        self._record(
+            phase="expression",
+            title=f"Relational expression ({op})",
+            description=f"Evaluating '{ctx.expression(0).getText()}' {op} '{ctx.expression(1).getText()}'.",
+            line=ctx.start.line,
         )
-        try:
-            left_val, right_val = handler.check()
-        except ValueError as exc:
-            self.validator.push_error(ctx.op, str(exc))
-            return EvalType.BOOL
 
-        return Evaluator.evaluate_relational(left_val, op, right_val)
+        left_val, right_val = self._run_comparison(ctx, op, "Relational")
 
-
+        result = Evaluator.evaluate_relational(left_val, op, right_val)
+        self._record(
+            phase="expression",
+            title=f"Relational result ({op})",
+            description=f"{left_val!r} {op} {right_val!r} → {result!r}.",
+            line=ctx.start.line,
+            detail=f"left={left_val!r}, right={right_val!r}, result={result!r}",
+        )
+        return result
 
     def visitAdditiveExpr(self, ctx: EVALParser.AdditiveExprContext) -> Any:
+        op  = ctx.op.text
         lhs = self.visit(ctx.expression(0))
         rhs = self.visit(ctx.expression(1))
-        op = ctx.op.text
 
-        lt = self.variable_manager.type_check(lhs)
-        rt = self.variable_manager.type_check(rhs)
+        lt = self.variable_manager.get_type(lhs)
+        rt = self.variable_manager.get_type(rhs)
 
-        # Type-check first — bail early on non-numeric operands
+        self._record(
+            phase="expression",
+            title=f"Additive expression ({op})",
+            description=(
+                f"'{ctx.expression(0).getText()}' {op} '{ctx.expression(1).getText()}' — "
+                f"left: {VariableManager.unwrap_value(lhs)!r} ({lt.name}), "
+                f"right: {VariableManager.unwrap_value(rhs)!r} ({rt.name})."
+            ),
+            line=ctx.start.line,
+            detail=f"op={op}, lt={lt.name}, rt={rt.name}",
+        )
+
+        # numeric_result() pushes the error internally; EMPTY contains sentinel
+        # bad-result types (UNKNOWN, NULL) — abort only when result IS one of those.
         result_type = self.validator.numeric_result(op, lt, rt, ctx.start)
-        if result_type == EvalType.UNKNOWN:
-            return EvalType.UNKNOWN
+        if result_type in TypeHandler.EMPTY:
+            self._record(
+                phase="expression",
+                title=f"Additive type error ({op})",
+                description=f"Operator '{op}' cannot be applied to '{lt.name}' and '{rt.name}'.",
+                line=ctx.start.line,
+                detail=f"error: incompatible types {lt.name} {op} {rt.name}",
+            )
+            raise ArithmeticError(
+                f"additive operator '{op}' cannot be applied to "
+                f"'{lt.name}' and '{rt.name}'"
+            )
 
-        # Build the full expression string from the parse tree so Postfix
-        # evaluates the whole compound expression in one pass (e.g.
-        # "10 / 5 + 23 - 6") rather than operating on a single pairwise
-        # value which could be a negative intermediate (e.g. -2).
-        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
-        if expr_string is not None:
-            return Postfix.get_result(expr_string)
-
-        return result_type
-
-
+        return self._eval_postfix(ctx, "Additive", op, result_type)
 
     def visitMultiplicativeExpr(self, ctx: EVALParser.MultiplicativeExprContext) -> Any:
+        op  = ctx.op.text
         lhs = self.visit(ctx.expression(0))
         rhs = self.visit(ctx.expression(1))
-        op = ctx.op.text
 
-        lt = self.variable_manager.type_check(lhs)
-        rt = self.variable_manager.type_check(rhs)
+        lt = self.variable_manager.get_type(lhs)
+        rt = self.variable_manager.get_type(rhs)
+
+        self._record(
+            phase="expression",
+            title=f"Multiplicative expression ({op})",
+            description=(
+                f"'{ctx.expression(0).getText()}' {op} '{ctx.expression(1).getText()}' — "
+                f"left: {VariableManager.unwrap_value(lhs)!r} ({lt.name}), "
+                f"right: {VariableManager.unwrap_value(rhs)!r} ({rt.name})."
+            ),
+            line=ctx.start.line,
+            detail=f"op={op}, lt={lt.name}, rt={rt.name}",
+        )
 
         result_type = self.validator.numeric_result(op, lt, rt, ctx.start)
         if result_type == EvalType.UNKNOWN:
-            return EvalType.UNKNOWN
+            self._record(
+                phase="expression",
+                title=f"Multiplicative type error ({op})",
+                description=f"Operator '{op}' cannot be applied to '{lt.name}' and '{rt.name}'.",
+                line=ctx.start.line,
+                detail=f"error: incompatible types {lt.name} {op} {rt.name}",
+            )
+            raise ArithmeticError(
+                f"multiplicative operator '{op}' cannot be applied to "
+                f"'{lt.name}' and '{rt.name}'"
+            )
 
-        # Warn when '%' is applied to floating-point operands.  Java and Go
-        # forbid this outright; Python allows it but the result is often
-        # surprising (e.g. 5.5 % 2.0 == 1.5, sign follows dividend, not
-        # divisor).  Surface a diagnostic so the programmer can cast first.
-        if op == "%" and result_type != EvalType.UNKNOWN:
+        if op == "%" and result_type not in TypeHandler.EMPTY:
             self.validator.check_modulo_float(lt, rt, ctx.start)
 
-        expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
-        if expr_string is not None:
-            try:
-                return Postfix.get_result(expr_string)
-            except ZeroDivisionError:
-                self.validator.push_error(
-                    ctx.start,
-                    f"{'division' if op == '/' else 'modulo'} by zero",
-                )
-                return EvalType.UNKNOWN
-
-        return result_type
+        try:
+            return self._eval_postfix(ctx, "Multiplicative", op, result_type)
+        except ZeroDivisionError as e:
+            op_name = "division" if op == "/" else "modulo"
+            msg     = f"{op_name} by zero"
+            self.validator.push_error(ctx.start, msg)
+            self._record(
+                phase="expression",
+                title=f"Division by zero ({op})",
+                description=f"{op_name.capitalize()} by zero.",
+                line=ctx.start.line,
+                detail=f"error: {msg}",
+            )
+            raise ArithmeticError(f"{op_name} by zero") from e
 
     def visitUnaryMinusExpr(self, ctx: EVALParser.UnaryMinusExprContext) -> Any:
+        self._record(
+            phase="expression",
+            title="Unary minus (-)",
+            description=f"Evaluating unary minus on: '{ctx.expression().getText()}'.",
+            line=ctx.start.line,
+        )
         inner = self.visit(ctx.expression())
-        t = self.variable_manager.type_check(inner)
+        t     = self.variable_manager.get_type(inner)
 
-        if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
-            self.validator.push_error(
-                ctx.start,
-                f"unary '-' requires a numeric operand, got {t.name}",
+        if t not in TypeHandler.NUMERIC:
+            self._error(
+                phase="expression",
+                title="Unary minus type error",
+                token=ctx.start,
+                msg=f"unary '-' requires a numeric operand, got {t.name}",
+                line=ctx.start.line,
+                description=f"Cannot apply unary '-' to type {t.name} — expected a numeric type.",
+                detail=f"error: expected NUMERIC, got {t.name}",
             )
-            return EvalType.UNKNOWN
+            raise ArithmeticError(
+                f"unary '-' requires a numeric operand, got '{t.name}'"
+            )
 
-        # _build_numeric_expr_string represents unary minus as (0 - x)
-        # so Postfix never sees a bare negative literal as its first token
         expr_string = ExpressionStringBuilder.build(ctx, self.variable_manager, self.visit)
         if expr_string is not None:
-            return Postfix.get_result(expr_string)
+            result = Postfix.get_result(expr_string)
+            self._record(
+                phase="expression",
+                title="Unary minus result",
+                description=f"Unary minus on '{ctx.expression().getText()}' → {result!r}.",
+                line=ctx.start.line,
+                detail=f"operand_type={t.name}, result={result!r}",
+            )
+            return result
 
-        return t if t in TypeHandler.NUMERIC else EvalType.UNKNOWN
-
+        return None
 
     def visitUnaryNotExpr(self, ctx: EVALParser.UnaryNotExprContext) -> bool | EvalType:
+        self._record(
+            phase="expression",
+            title="Unary NOT (!)",
+            description=f"Evaluating logical NOT on: '{ctx.expression().getText()}'.",
+            line=ctx.start.line,
+        )
         inner = self.visit(ctx.expression())
-        t     = self.variable_manager.type_check(inner)
-        if t not in (EvalType.BOOL, EvalType.UNKNOWN, None):
+        t     = self.variable_manager.get_type(inner)
+
+        if t != EvalType.BOOL:
             self.validator.push_warnings(
                 ctx.start,
                 f"'!' applied to {t.name} — expected bool",
             )
-        # Return the concrete negation when the operand is a known bool, so
-        # that visitIfStatement and the while-loop can branch accurately.
+            self._record(
+                phase="expression",
+                title="Unary NOT type error",
+                description=f"'!' applied to non-bool type {t.name} — expected BOOL.",
+                line=ctx.start.line,
+                detail=f"error: expected BOOL, got {t.name}",
+            )
+            raise TypeError(
+                f"'!' requires a bool operand, got '{t.name}'"
+            )
+
         val = VariableManager.unwrap_value(inner)
         if isinstance(val, bool):
-            return not val
-        return EvalType.BOOL
+            result = not val
+            self._record(
+                phase="expression",
+                title="Unary NOT result",
+                description=f"!{val!r} → {result!r}.",
+                line=ctx.start.line,
+                detail=f"operand={val!r}, result={result!r}",
+            )
+            return result
+
+        self._record(
+            phase="expression",
+            title="Unary NOT result (indeterminate)",
+            description="Operand value not statically known — returning False as safe default.",
+            line=ctx.start.line,
+        )
+        return False
 
     def visitParenExpr(self, ctx: EVALParser.ParenExprContext) -> Any:
-        return self.visit(ctx.expression())
+        result = self.visit(ctx.expression())
+        self._record(
+            phase="expression",
+            title="Parenthesised expression result",
+            description=f"'({ctx.expression().getText()})' → {VariableManager.unwrap_value(result)!r}.",
+            line=ctx.start.line,
+            detail=f"result={VariableManager.unwrap_value(result)!r}",
+        )
+        return result
 
     def visitBuiltinExpr(self, ctx: EVALParser.BuiltinExprContext) -> Any:
         return self.visit(ctx.builtinFunc())
 
-    # ── Identifier / literals ─────────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Identifier / literals
+    # ─────────────────────────────────────────────────────────────────────────
 
     def visitIdentExpr(self, ctx: EVALParser.IdentExprContext) -> Variable | None:
         tok  = ctx.IDENTIFIER().getSymbol()
         name = tok.text
+        self._record(
+            phase="expression",
+            title=f"Identifier lookup: {name}",
+            description=f"Resolving identifier '{name}' in scope.",
+            line=tok.line,
+        )
         try:
-            return self.variable_manager.get_variable(name)
+            var = self.variable_manager.get_variable(name)
+            self._record(
+                phase="expression",
+                title=f"Identifier resolved: {name}",
+                description=(
+                    f"'{name}' found — value: {var.value!r}, "
+                    f"type: {self.variable_manager.get_type(var).name}."
+                ),
+                line=tok.line,
+                detail=f"value={var.value!r}, type={self.variable_manager.get_type(var).name}",
+            )
+            return var
         except EVALNameException as e:
-            self.validator.push_error(ctx.start, str(e))
+            self._error(
+                phase="expression",
+                title=f"Undeclared identifier: {name}",
+                token=ctx.start,
+                msg=str(e),
+                line=tok.line,
+                description=f"'{name}' is not declared in any accessible scope.",
+                detail=f"error: {e}",
+            )
             return None
 
     def visitIntLiteral(self, ctx) -> int:
-        return int(ctx.INTEGER().getText())
+        value = int(ctx.INTEGER().getText())
+        self._record(
+            phase="expression",
+            title=f"Integer literal: {value}",
+            description=f"Integer literal {value} evaluated.",
+            line=ctx.start.line,
+            detail=f"value={value}, type=INT",
+        )
+        return value
 
     def visitRealLiteral(self, ctx) -> float:
-        return float(ctx.REAL().getText())
+        value = float(ctx.REAL().getText())
+        self._record(
+            phase="expression",
+            title=f"Float literal: {value}",
+            description=f"Float literal {value} evaluated.",
+            line=ctx.start.line,
+            detail=f"value={value}, type=FLOAT",
+        )
+        return value
 
     def visitStringLiteral(self, ctx) -> str:
-        return ctx.STRING().getText()
+        value = ctx.STRING().getText()
+        self._record(
+            phase="expression",
+            title="String literal",
+            description=f"String literal {value!r} evaluated.",
+            line=ctx.start.line,
+            detail=f"value={value!r}, type=STRING",
+        )
+        return value
 
     def visitTrueLiteral(self, ctx) -> bool:
+        self._record(
+            phase="expression",
+            title="Boolean literal: true",
+            description="Literal 'true' evaluated.",
+            line=ctx.start.line,
+            detail="value=True, type=BOOL",
+        )
         return True
 
     def visitFalseLiteral(self, ctx) -> bool:
+        self._record(
+            phase="expression",
+            title="Boolean literal: false",
+            description="Literal 'false' evaluated.",
+            line=ctx.start.line,
+            detail="value=False, type=BOOL",
+        )
         return False
 
     def visitNullLiteral(self, _ctx) -> None:
+        self._record(
+            phase="expression",
+            title="Null literal",
+            description="Literal 'null' evaluated.",
+            line=_ctx.start.line,
+            detail="value=None, type=NULL",
+        )
         return None
 
     def visitMacroExpr(self, ctx: EVALParser.MacroExprContext) -> Any:
         return self.visit(ctx.macroValue())
 
-    # ── Built-in functions ────────────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Built-in functions
+    # ─────────────────────────────────────────────────────────────────────────
 
     def visitBuiltinFunc(self, ctx: EVALParser.BuiltinFuncContext) -> Any:
         return self.visitChildren(ctx)
 
     def visitCastCall(self, ctx) -> Any:
-        expression = ctx.expression()
-        visited_val = self.visit(expression)
+        expression  = ctx.expression()
         target_text = ctx.type_().getText()
         target_type = TypeHandler.get_eval_type(target_text)
 
+        self._record(
+            phase="expression",
+            title=f"cast() — target: {target_text}",
+            description=f"Evaluating cast({expression.getText()}, {target_text}).",
+            line=ctx.start.line,
+        )
+
+        visited_val = self.visit(expression)
 
         _INVALID_CAST_TARGETS = {EvalType.NULL, EvalType.UNKNOWN}
         if target_type in _INVALID_CAST_TARGETS:
@@ -870,15 +1650,25 @@ class SemanticAnalyzer(BaseVisitor):
                 f"invalid cast target type '{target_text}': "
                 f"cannot cast to '{target_type.value}'"
             )
-            self.validator.push_error(ctx.type_().start, msg)
+            self._error(
+                phase="expression",
+                title="cast() invalid target",
+                token=ctx.type_().start,
+                msg=msg,
+                line=ctx.start.line,
+            )
             raise CastException(msg)
-
 
         if visited_val is None:
             msg = "cast argument could not be resolved"
-            self.validator.push_error(expression.start, msg)
+            self._error(
+                phase="expression",
+                title="cast() unresolved argument",
+                token=expression.start,
+                msg=msg,
+                line=ctx.start.line,
+            )
             raise CastException(msg)
-
 
         if isinstance(visited_val, Variable):
             val = VariableManager.unwrap_value(visited_val)
@@ -889,187 +1679,145 @@ class SemanticAnalyzer(BaseVisitor):
                 f"cast argument has unsupported type '{type(visited_val).__name__}': "
                 f"expected int, float, str, bool, or Variable"
             )
-            self.validator.push_error(expression.start, msg)
+            self._error(
+                phase="expression",
+                title="cast() unsupported argument type",
+                token=expression.start,
+                msg=msg,
+                line=ctx.start.line,
+            )
             raise CastException(msg)
 
         if val is None:
             msg = "cast argument evaluates to null and cannot be cast"
-            self.validator.push_error(expression.start, msg)
+            self._error(
+                phase="expression",
+                title="cast() null argument",
+                token=expression.start,
+                msg=msg,
+                line=ctx.start.line,
+            )
             raise CastException(msg)
 
         result = Evaluator.cast(val, target_type)
         if result is None:
             msg = f"cast failed: could not convert '{val!r}' to '{target_type.value}'"
-            self.validator.push_error(expression.start, msg)
+            self._error(
+                phase="expression",
+                title="cast() conversion failed",
+                token=expression.start,
+                msg=msg,
+                line=ctx.start.line,
+            )
             raise CastException(msg)
 
+        self._record(
+            phase="expression",
+            title="cast() result",
+            description=f"cast({val!r}, {target_text}) → {result!r}.",
+            line=ctx.start.line,
+            detail=f"input={val!r}, target={target_text}, result={result!r}",
+        )
         return result
 
     def visitPowCall(self, ctx: EVALParser.PowCallContext) -> Any:
-        left_expr = ctx.expression(0)
+        left_expr  = ctx.expression(0)
         right_expr = ctx.expression(1)
 
-        left_val = self.visit(left_expr)
-        right_val = self.visit(right_expr)
-
-        # ── 1. Validate both sides resolved to something ──────────────────────
-        if left_val is None:
-            msg = f"pow() first argument could not be resolved"
-            self.validator.push_error(left_expr.start, msg)
-            raise PowException(msg)
-
-        if right_val is None:
-            msg = f"pow() second argument could not be resolved"
-            self.validator.push_error(right_expr.start, msg)
-            raise PowException(msg)
-
-
-        left_type = self.variable_manager.type_check(left_val)
-        right_type = self.variable_manager.type_check(right_val)
-
-        if left_type not in TypeHandler.NUMERIC:
-            msg = f"pow() first argument must be numeric, got '{left_type.name}'"
-            self.validator.push_error(left_expr.start, msg)
-            raise PowException(msg)
-
-        if right_type not in TypeHandler.NUMERIC:
-            msg = f"pow() second argument must be numeric, got '{right_type.name}'"
-            self.validator.push_error(right_expr.start, msg)
-            raise PowException(msg)
-
-
-        left_unwrapped = VariableManager.unwrap_value(left_val)
-        right_unwrapped = VariableManager.unwrap_value(right_val)
-
-        if left_unwrapped is None:
-            msg = "pow() first argument evaluates to null"
-            self.validator.push_error(left_expr.start, msg)
-            raise PowException(msg)
-
-        if right_unwrapped is None:
-            msg = "pow() second argument evaluates to null"
-            self.validator.push_error(right_expr.start, msg)
-            raise PowException(msg)
+        self._record(
+            phase="expression",
+            title="pow()",
+            description=f"Evaluating pow({left_expr.getText()}, {right_expr.getText()}).",
+            line=ctx.start.line,
+        )
 
 
         try:
-            result = pow(left_unwrapped, right_unwrapped)
+            result = self._visit_binary_numeric_call(ctx, pow, "pow")
+            if result is None:
+                raise PowException("pow: result could not be resolved")
         except (ValueError, TypeError, ZeroDivisionError) as e:
             msg = (
                 f"pow() failed for operands "
-                f"'{left_unwrapped!r}' and '{right_unwrapped!r}': {e}"
+                f"'{self.visit(left_expr)!r}' and '{self.visit(right_expr)!r}': {e}"
             )
-            self.validator.push_error(left_expr.start, msg)
+            self._error(phase="expression", title="pow() computation failed", token=left_expr.start, msg=msg, line=ctx.start.line)
             raise PowException(msg) from e
 
-        if left_type == EvalType.FLOAT or right_type == EvalType.FLOAT:
-            return float(result)
 
-        return int(result)
+        return result
+
+
 
     def visitSqrtCall(self, ctx: EVALParser.SqrtCallContext) -> Any:
         expression = ctx.expression()
-        value      = self.visit(expression)
+        self._record(
+            phase="expression",
+            title="sqrt()",
+            description=f"Evaluating sqrt({expression.getText()}).",
+            line=ctx.start.line,
+        )
 
-        if value is None:
-            self.validator.push_warnings(
-                expression.start,
-                "sqrt() argument could not be resolved",
-            )
-            return EvalType.FLOAT
+        return self._visit_unary_numeric_call(ctx, sqrt, "sqrt")
 
-        t = self.variable_manager.type_check(value)
-        if t not in TypeHandler.EMPTY and t not in TypeHandler.NUMERIC:
-            self.validator.push_error(
-                expression.start,
-                f"sqrt() requires a numeric argument, got {t.name}",
-            )
-            return EvalType.UNKNOWN
-
-        v = VariableManager.unwrap_value(value)
-        if isinstance(v, (int, float)):
-            if v < 0:
-                self.validator.push_error(
-                    expression.start,
-                    "sqrt() argument must be non-negative",
-                )
-                return EvalType.UNKNOWN
-            return sqrt(v)
-
-        return EvalType.FLOAT
 
     def visitMinCall(self, ctx: EVALParser.MinCallContext) -> Any:
-        first_val  = self.visit(ctx.expression(0))
-        second_val = self.visit(ctx.expression(1))
-
-        ft = self.variable_manager.type_check(first_val)
-        st = self.variable_manager.type_check(second_val)
-
-        self.validator.require_numeric(ft, ctx.expression(0), "min() first argument")
-        self.validator.require_numeric(st, ctx.expression(1), "min() second argument")
-
-        fv = VariableManager.unwrap_value(first_val)
-        sv = VariableManager.unwrap_value(second_val)
-        if isinstance(fv, (int, float)) and isinstance(sv, (int, float)):
-            return min(fv, sv)
-
-        return EvalType.FLOAT if EvalType.FLOAT in (ft, st) else EvalType.INT
+        self._record(
+            phase="expression",
+            title="min()",
+            description=f"Evaluating min({ctx.expression(0).getText()}, {ctx.expression(1).getText()}).",
+            line=ctx.start.line,
+        )
+        return self._visit_binary_numeric_call(ctx, min, "min")
 
     def visitMaxCall(self, ctx: EVALParser.MaxCallContext) -> Any:
-        first_val  = self.visit(ctx.expression(0))
-        second_val = self.visit(ctx.expression(1))
+        self._record(
+            phase="expression",
+            title="max()",
+            description=f"Evaluating max({ctx.expression(0).getText()}, {ctx.expression(1).getText()}).",
+            line=ctx.start.line,
+        )
+        return self._visit_binary_numeric_call(ctx, max, "max")
 
-        ft = self.variable_manager.type_check(first_val)
-        st = self.variable_manager.type_check(second_val)
-
-        self.validator.require_numeric(ft, ctx.expression(0), "max() first argument")
-        self.validator.require_numeric(st, ctx.expression(1), "max() second argument")
-
-        fv = VariableManager.unwrap_value(first_val)
-        sv = VariableManager.unwrap_value(second_val)
-        if isinstance(fv, (int, float)) and isinstance(sv, (int, float)):
-            return max(fv, sv)
-
-        return EvalType.FLOAT if EvalType.FLOAT in (ft, st) else EvalType.INT
 
     def visitRoundCall(self, ctx: EVALParser.RoundCallContext) -> Any:
-        expression = ctx.expression()
-        value      = self.visit(expression)
-
-        t = self.variable_manager.type_check(value)
-        self.validator.require_numeric(t, expression, "round() argument")
-
-        v = VariableManager.unwrap_value(value)
-        if isinstance(v, (int, float)):
-            return round(v)
-
-        return EvalType.FLOAT
+        self._record(
+            phase="expression",
+            title="round()",
+            description=f"Evaluating round({ctx.expression().getText()}).",
+            line=ctx.start.line,
+        )
+        return self._visit_unary_numeric_call(ctx, round, "round")
 
     def visitAbsCall(self, ctx: EVALParser.AbsCallContext) -> Any:
-        expression = ctx.expression()
-        value      = self.visit(expression)
-
-        t = self.variable_manager.type_check(value)
-        self.validator.require_numeric(t, expression, "abs() argument")
-
-        v = VariableManager.unwrap_value(value)
-        if isinstance(v, (int, float)):
-            return abs(v)
-
-        return t if t in TypeHandler.NUMERIC else EvalType.UNKNOWN
-
-    # ── Macro constants ───────────────────────────────────────────────────────
+        self._record(
+            phase="expression",
+            title="abs()",
+            description=f"Evaluating abs({ctx.expression().getText()}).",
+            line=ctx.start.line,
+        )
+        return self._visit_unary_numeric_call(ctx, abs, "abs")
 
     def visitMacroValue(self, ctx: EVALParser.MacroValueContext) -> Any:
-        if ctx.PI():
-            return pi
 
-        now = datetime.now()
-        if ctx.DAYS_IN_WEEK():
-            return now.weekday()   # 0 = Monday … 6 = Sunday
-        if ctx.HOURS_IN_DAY():
-            return now.hour
-        if ctx.YEAR():
-            return now.year
+        key: str = ctx.getText()
+        macro_info = MacroValue.get_macro_info(key)
 
+        if macro_info:
+            self._record(
+                phase="expression",
+                title=macro_info.title,
+                description=macro_info.description,
+                line=ctx.start.line,
+                detail=f"value={macro_info.value}",
+            )
+
+            return macro_info.value
+
+        self._record(
+            phase="expression",
+            title="Macro: unknown",
+            description="Encountered an unrecognised macro — returning None.",
+            line=ctx.start.line,
+        )
         return None
