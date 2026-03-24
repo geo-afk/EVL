@@ -792,6 +792,12 @@ class SemanticAnalyzer(BaseVisitor):
                 line=blocks[-1].start.line,
             )
 
+
+
+
+
+
+
     def visitWhileStatement(self, ctx: EVALParser.WhileStatementContext) -> None:
         _MAX_ITERATIONS = 1_000
 
@@ -848,6 +854,70 @@ class SemanticAnalyzer(BaseVisitor):
             line=ctx.start.line,
             detail=f"type={cond_type}, value={cond_value!r}",
         )
+
+        # ── Infinite-loop guard ───────────────────────────────────────────────
+        # Collect every variable referenced in the condition, then check whether
+        # all of them are const (i.e. can never be mutated by the loop body).
+        # If they are all const the condition can never flip to False on its own,
+        # so the only legal exit is a break statement.
+        cond_vars      = Evaluator().collect_condition_vars(expr)
+        assigned_vars  = Evaluator().assigned_vars_in_block(ctx.block())
+        loop_has_break = Evaluator().has_break(ctx.block())
+
+        # Variables in the condition that are const AND not assigned in the body.
+        frozen_cond_vars = {
+            v for v in cond_vars
+            if self.variable_manager.exists(v)
+            and self.variable_manager.get_variable(v).constant
+            and v not in assigned_vars
+        }
+
+        if frozen_cond_vars and frozen_cond_vars == cond_vars:
+            # Every condition variable is frozen — condition can never change.
+            frozen_list = ", ".join(sorted(frozen_cond_vars))
+            if not loop_has_break:
+                # No break either → definite infinite loop.
+                msg = (
+                    f"infinite loop detected: condition variable(s) [{frozen_list}] "
+                    f"are all const and the loop body contains no break statement — "
+                    f"the condition '{expr.getText()}' can never become False"
+                )
+                self._error(
+                    phase="control_flow",
+                    title="Infinite loop (const condition, no break)",
+                    token=expr.start,
+                    msg=msg,
+                    line=ctx.start.line,
+                    detail="error: const condition vars, no break",
+                    description=(
+                        f"All variable(s) in the while condition [{frozen_list}] are declared "
+                        f"const and are never assigned inside the loop body. With no break "
+                        f"statement present the loop cannot terminate — infinite loop."
+                    ),
+                )
+                return
+            else:
+                # Break exists but condition vars are all const → the only exit
+                # is that break, which may itself be unreachable (e.g. guarded by
+                # a condition that is always false).  Emit a warning so the
+                # programmer is aware.
+                msg = (
+                    f"possible infinite loop: condition variable(s) [{frozen_list}] "
+                    f"are all const — the loop can only exit via break, "
+                    f"which may be unreachable"
+                )
+                self.validator.push_warnings(expr.start, msg)
+                self._record(
+                    phase="control_flow",
+                    title="Possible infinite loop (const condition, break present)",
+                    description=(
+                        f"All variable(s) in the while condition [{frozen_list}] are const "
+                        f"and never assigned in the loop body. A break exists but may not be "
+                        f"reachable — verify the loop can actually terminate."
+                    ),
+                    line=ctx.start.line,
+                    detail=f"warning: const condition vars={frozen_list}, break present",
+                )
 
         self._loop_depth += 1
         iteration = 0
