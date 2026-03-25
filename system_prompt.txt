@@ -315,6 +315,8 @@ OUTPUT FORMAT (STRICT)
 VALID EXECUTION:
 {
   "status": "ok",
+  "tokens": "A clear list of all the tokens that would be generated during the lexical analysis phase based on the list of tokens and the grammar provided",
+  "Summary": "A summary of what the code is doing",
   "output": [ "..." ]
 }
 
