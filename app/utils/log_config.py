@@ -10,6 +10,7 @@ def setup_logging(log_level: str = "INFO"):
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
+        force=True,
         level=getattr(logging, log_level.upper())
     )
 
@@ -17,6 +18,8 @@ def setup_logging(log_level: str = "INFO"):
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),  # Adds stack information
+            structlog.processors.format_exc_info,  # Formats exception info
 
             structlog.processors.CallsiteParameterAdder(
                 [
