@@ -10,11 +10,9 @@ CONST       : 'const';
 // ─── Control Flow ─────────────────────────────────────────────────────────────
 IF          : 'if';
 ELSE        : 'else';
-FOR         : 'for';
 WHILE       : 'while';
 BREAK       : 'break';
 CONTINUE    : 'continue';
-RETURN      : 'return';
 TRY         : 'try';
 CATCH       : 'catch';
 
@@ -48,10 +46,6 @@ AND_OP      : '&&';
 OR_OP       : '||';
 NOT_OP      : '!';
 
-// ─── Increment / Decrement ────────────────────────────────────────────────────
-// NOTE: Must appear BEFORE PLUS and MINUS so '++' is not tokenised as two '+'
-INCREMENT   : '++';
-DECREMENT   : '--';
 
 // ─── Compound Assignment Operators ────────────────────────────────────────────
 // NOTE: Must appear BEFORE ASSIGN ('=') to avoid mis-tokenising '+=' as '+' '='
@@ -85,10 +79,7 @@ LBRACE      : '{';
 RBRACE      : '}';
 LPAREN      : '(';
 RPAREN      : ')';
-LBRACKET    : '[';
-RBRACKET    : ']';
 COMMA       : ',';
-SEMICOLON   : ';';
 
 // ─── Literals ─────────────────────────────────────────────────────────────────
 // NOTE: REAL must come BEFORE INTEGER so '3.14' is not split into '3' '.' '14'
