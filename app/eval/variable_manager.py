@@ -80,7 +80,7 @@ class VariableManager:
         """Return the full Variable record; raises EVALNameException when absent."""
         scope = self._find_scope(name)
         if scope is None:
-            raise EVALNameException(f"Variable '{name}' is not defined")
+            raise EVALNameException(f"Variable '{name}' is not defined or used before assigned")
         return scope.variables[name]
 
     def exists(self, name: str) -> bool:

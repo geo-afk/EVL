@@ -10,8 +10,6 @@ from generated.EVALParser import EVALParser
 
 
 
-
-
 logger = structlog.get_logger(__name__)
 
 
@@ -24,7 +22,6 @@ class EVALAnalyzer:
 
         parse_tree, parse_errors = self._syntax_analysis(tokens)
         if parse_errors:
-            print(parse_errors)
             return AnalysisResponse.from_errors_only(parse_errors)
 
         return self._semantic_analysis(parse_tree)
@@ -33,22 +30,18 @@ class EVALAnalyzer:
     @staticmethod
     def _lexical_analysis(eval_code: str) -> tuple[CommonTokenStream | None, list[ErrorResponse]]:
         logger.info("lexical_analysis_started")
+        error_listener = EVALErrorListener()
         try:
             input_stream = InputStream(eval_code)
             lexer        = EVALLexer(input_stream)
             lexer.removeErrorListeners()
-            error_listener = EVALErrorListener()
             lexer.addErrorListener(error_listener)
             stream = CommonTokenStream(lexer)
             stream.fill()
             return stream, error_listener.errors
         except Exception as e:
             logger.error("lexical_analysis_failed", error=str(e))
-            return None, [ErrorResponse(
-                message=f"Lexical analysis failed: {e}",
-                line_number=0,
-                column_number=0,
-            )]
+            return None, error_listener.errors
 
 
     @staticmethod
@@ -56,25 +49,20 @@ class EVALAnalyzer:
         token_stream: CommonTokenStream,
     ) -> tuple[EVALParser.ProgramContext | None, list[ErrorResponse]]:
         logger.info("syntax_analysis_started")
+        error_listener = EVALErrorListener()
         try:
             parser = EVALParser(token_stream)
             parser.removeErrorListeners()
-            error_listener = EVALErrorListener()
             parser.addErrorListener(error_listener)
             tree = parser.program()
             return tree, error_listener.errors
         except Exception as e:
-            # logger.error("syntax_analysis_failed", error=str(e))
             logger.error("syntax_analysis_failed", error=str(e), exc_info=True)
-            return None, [ErrorResponse(
-                message=f"Syntax analysis failed: {e}",
-                line_number=0,
-                column_number=0,
-            )]
+            return None, error_listener.errors
 
 
     @staticmethod
-    def _semantic_analysis(parse_tree: EVALParser.ProgramContext) -> AnalysisResponse| ErrorResponse:
+    def _semantic_analysis(parse_tree: EVALParser.ProgramContext) -> AnalysisResponse:
         logger.info("semantic_analysis_started")
         analyzer = SemanticAnalyzer()
         try:
@@ -88,12 +76,6 @@ class EVALAnalyzer:
             )
 
         except Exception as e:
-            # logger.error("semantic_analysis_failed", error=str(e), exc_info=True)
             logger.error("semantic_analysis_failed", error=str(e), exc_info=True)
-
-            return ErrorResponse(
-                message=f"Syntax analysis failed: {e}",
-                line_number=0,
-                column_number=0,
-            )
+            return AnalysisResponse.from_errors_only(analyzer.errors)
 
