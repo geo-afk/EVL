@@ -305,7 +305,6 @@ class SemanticAnalyzer(BaseVisitor):
         name      = ident_tok.text
         line      = ident_tok.line
 
-
         if self.validator.check_reserved_keyword(name, ident_tok):
             self._record(
                 phase="declaration",
@@ -1426,6 +1425,7 @@ class SemanticAnalyzer(BaseVisitor):
                 line=ctx.start.line,
                 detail=f"error: incompatible types {lt.name} {op} {rt.name}",
             )
+            self.validator.push_error(ctx.start, msg)
             raise ArithmeticError(
                 f"additive operator '{op}' cannot be applied to "
                 f"'{lt.name}' and '{rt.name}'"
@@ -1455,12 +1455,14 @@ class SemanticAnalyzer(BaseVisitor):
 
         result_type = self.validator.numeric_result(op, lt, rt, ctx.start)
         if result_type == EvalType.UNKNOWN:
-            self._record(
+
+            msg=f"Operator '{op}' cannot be applied to '{lt.name}' and '{rt.name}'."
+            self._error(
                 phase="expression",
-                title=f"Multiplicative type error ({op})",
-                description=f"Operator '{op}' cannot be applied to '{lt.name}' and '{rt.name}'.",
+                title="cast() conversion failed",
+                token=ctx.start,
+                msg=msg,
                 line=ctx.start.line,
-                detail=f"error: incompatible types {lt.name} {op} {rt.name}",
             )
             raise ArithmeticError(
                 f"multiplicative operator '{op}' cannot be applied to "
@@ -1474,14 +1476,15 @@ class SemanticAnalyzer(BaseVisitor):
             return self._eval_postfix(ctx, "Multiplicative", op, result_type)
         except ZeroDivisionError as e:
             op_name = "division" if op == "/" else "modulo"
-            msg     = f"{op_name} by zero"
-            self.validator.push_error(ctx.start, msg)
-            self._record(
+
+            msg=f"{op_name.capitalize()} by zero."
+
+            self._error(
                 phase="expression",
                 title=f"Division by zero ({op})",
-                description=f"{op_name.capitalize()} by zero.",
+                token=ctx.start,
+                msg=msg,
                 line=ctx.start.line,
-                detail=f"error: {msg}",
             )
             raise ArithmeticError(f"{op_name} by zero") from e
 
@@ -1545,6 +1548,7 @@ class SemanticAnalyzer(BaseVisitor):
                 line=ctx.start.line,
                 detail=f"error: expected BOOL, got {t.name}",
             )
+
             raise TypeError(
                 f"'!' requires a bool operand, got '{t.name}'"
             )
