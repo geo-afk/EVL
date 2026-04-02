@@ -1,3 +1,22 @@
+const int temperature = 32
+
+while (temperature == 32) {
+    if (temperature >= 0) {
+        print("It's freezing!")
+    }
+
+    if(temperature == 35){
+        print("Temp", temperature)
+        break
+    }
+}
+
+print(temperature)
+
+int val = abs(temperature)
+print("Check complete", val)
+
+
 // ─────────────────────────────────────────────────────────────
 // Constants and variable declarations
 // ─────────────────────────────────────────────────────────────
