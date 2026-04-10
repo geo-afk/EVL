@@ -2,7 +2,6 @@ import operator as _op
 from typing import Any
 from app.models.Types import EvalType, TypeHandler
 from app.models.custom_exceptions import CoercionException
-from generated.EVALParser import EVALParser
 
 _RELATIONAL_OPS: dict[str, Any] = {
     "<":  _op.lt,
@@ -167,84 +166,5 @@ class Evaluator:
         Used to gate compound operators (+=, -=, *=, /=).
         """
         return t not in TypeHandler.NUMERIC
-
-
-    @staticmethod
-    def process_print_arg(value) -> str:
-        """
-        Convert a print argument to its display string.
-        - If the value is a string, strip surrounding quotes and resolve escape sequences.
-        - Otherwise, just stringify it (handles ints, floats, bools, None, etc.)
-        """
-        if value is None:
-            return ""
-
-        if not isinstance(value, str):
-            return str(value)
-
-        # Strip surrounding quotes left behind by the lexer  ← fix
-        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
-            value = value[1:-1]
-        elif len(value) >= 2 and value[0] == "'" and value[-1] == "'":
-            value = value[1:-1]
-
-        # Escape sequence table – extend as your language grows
-        escape_sequences: dict[str, str] = {
-            "\\n": "\n",
-            "\\t": "\t",
-            "\\r": "\r",
-            "\\\\": "\\",
-            '\\"': '"',
-            "\\'": "'",
-            "\\0": "\0",
-        }
-
-        result = value
-        for escape, replacement in escape_sequences.items():
-            result = result.replace(escape, replacement)
-
-        return result
-
-    def collect_condition_vars(self, tree) -> set:
-        """
-        Recursively collects the names of every IDENTIFIER referenced inside
-        a condition expression tree.  Used to pinpoint which variables must
-        change for the while-condition to ever become False.
-        """
-        names = set()
-        if isinstance(tree, EVALParser.IdentExprContext):
-            names.add(tree.IDENTIFIER().getText())
-        for i in range(tree.getChildCount()):
-            names |= self.collect_condition_vars(tree.getChild(i))
-        return names
-
-
-    def assigned_vars_in_block(self, tree) -> set:
-        """
-        Recursively collects the names of every variable that is the target of
-        an assignment anywhere inside the given block tree.  This tells us
-        which variables the loop body is capable of mutating.
-        """
-        names = set()
-        if isinstance(tree, EVALParser.AssignmentContext):
-            names.add(tree.IDENTIFIER().getText())
-        for i in range(tree.getChildCount()):
-            names |= self.assigned_vars_in_block(tree.getChild(i))
-        return names
-
-
-    def has_break(self, tree) -> bool:
-        """
-        Returns True if there is at least one break statement anywhere inside
-        the given tree — regardless of whether that break is reachable.
-        Used as a conservative check: if a break exists the loop *might*
-        terminate even when condition variables are never assigned.
-        """
-        if isinstance(tree, EVALParser.BreakStatementContext):
-            return True
-        for i in range(tree.getChildCount()):
-            if self.has_break(tree.getChild(i)):
-                return True
-        return False
 
 

@@ -37,6 +37,8 @@ class VariableManager:
         )
         self._scope_depth -= 1
 
+
+
     @property
     def depth(self) -> int:
         """Current nesting depth (0 = global)."""
@@ -93,6 +95,7 @@ class VariableManager:
         """Snapshot of variables declared in the innermost scope only."""
         return dict(self._current_scope.variables)
 
+
     def all_visible_vars(self) -> dict[str, Variable]:
         """
         All variables visible from the current scope, with inner-scope names
@@ -142,7 +145,6 @@ class VariableManager:
     def get_type(val: Any) -> EvalType:
         """
         Extract an EvalType from any visitor result.
-
         Handles Variable objects, EvalType sentinels, and raw Python values.
         """
         if isinstance(val, Variable):

@@ -13,4 +13,7 @@ class RunCodeRequest(BaseModel):
 
 @eval_router.post("/run_code")
 def run_code(request: RunCodeRequest) -> AnalysisResponse:
-    return EVALAnalyzer().analyze(request.code)
+    result = EVALAnalyzer().analyze(request.code)
+    print(result)
+    return result
+

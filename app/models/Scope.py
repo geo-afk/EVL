@@ -9,6 +9,8 @@ from app.models.Variable import Variable
 from app.models.custom_exceptions import ScopeException
 
 
+# Scope.parent -> Scope.parent -> null
+
 class Scope:
     def __init__(self, parent: Optional[Scope] = None, name: str = "global") -> None:
         self.parent:    Optional[Scope]      = parent
